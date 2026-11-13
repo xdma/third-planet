@@ -1,0 +1,6 @@
+# community reference checkout, not a dependency
+vendor/
+# build outputs
+plugins/*/build/
+plugins/*/dist/
+.DS_Store
