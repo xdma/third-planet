@@ -5,10 +5,11 @@
 
 The pages come from ui.json through the SDK's own generator (tools/gen_ui.py). This script then adds the
 status line across the top of every page and moves the 4 x 4 grid down to make room for it, adds the PATTERN
-page's steps and accents under its four knobs, and builds the LAYERS page (Mute, Solo, Nudge, Shake a layer),
-second after PLAY.
+page's steps and accents under its four knobs, builds the LAYERS page (Mute, Solo, Nudge, Shake a layer),
+and builds SKY, the star-chart page (spec 8.1), as the first tab: SKY, PLAY, LAYERS, then ui.json's pages.
+SKY's art comes from gen_art.py and its geometry from layout.py; its Q-Links are MAIN's 16 controls.
 The status line is live text: `Label` widgets of type Value bound to the plugin's display parameters
-(src/ThirdPlanet.cpp, kDispPage..kDispHold) and to Piece, with `Name` labels as captions. (A `Label` of
+(src/ThirdPlanet.cpp, kDispPad on) and to Piece, with `Name` labels as captions. (A `Label` of
 type Text did not render on the MPC in Kolo's device check, so there is no fixed text.)
 
 With skins/ present the SDK build copies it and no longer runs gen_ui.py, so rerun this script after a
@@ -24,6 +25,10 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import gen_art  # noqa: E402
+import layout as L  # noqa: E402
+
 PLUGIN = os.path.normpath(os.path.join(HERE, ".."))
 ROOT = os.path.normpath(os.path.join(PLUGIN, "..", ".."))
 GEN_UI = os.path.join(ROOT, "deps", "mpc-plugin-sdk", "tools", "gen_ui.py")
@@ -172,15 +177,224 @@ def pattern_steps(p):
     return comps
 
 
+# ---- Parameters by id ----
+# params.json carries no ids (host_sim writes "id": null), and names are not unique ("Next chord" is both the
+# PLAY one-shot and d_next), so the display parameters are found by their fixed order from d_pad on
+# (src/ThirdPlanet.cpp, enum Disp) and each one's name is checked. Controls are looked up by name below d_pad.
+DISPLAY = ([("d_pad", "Pad"), ("d_chord", "Chord"), ("d_hold", "Hold status"), ("d_lock", "Lock status"),
+            ("d_section", "Section"), ("d_phrase", "Phrase bar"), ("d_evolve", "Evolve chance"),
+            ("d_next", "Next chord"), ("d_next_in", "Next chord in"), ("d_prog", "Progression"),
+            ("d_ring", "Chord ring")]
+           + [("d_slot%d" % i, "Slot %d" % i) for i in range(1, 9)]
+           + [("d_slotname%d" % i, "Slot chord %d" % i) for i in range(1, 9)]
+           + [("d_px%d" % i, "Particle %d X" % i) for i in range(1, 9)]
+           + [("d_py%d" % i, "Particle %d Y" % i) for i in range(1, 9)]
+           + [("d_planet%d" % i, "Planet %d" % i) for i in range(1, 6)]
+           + [("d_log%d" % i, "Log line %d" % i) for i in range(1, 4)]
+           + [("d_drift%d" % i, "Filter drift %d" % i) for i in range(1, 6)]
+           + [("d_density", "Density drift"), ("d_step", "Step playing"), ("d_ext", "Clock"),
+              ("d_source", "Harmony source")])
+
+
+def parameter_maps(plist):
+    """(controls by name, display parameters by id), both as indices."""
+    by_index = {p["index"]: p["name"] for p in plist}
+    pad = min(p["index"] for p in plist if p["name"] == DISPLAY[0][1])
+    controls = {}
+    for p in plist:
+        if p["index"] < pad:
+            if p["name"] in controls:
+                sys.exit("gen_skin: two controls are named %r" % p["name"])
+            controls[p["name"]] = p["index"]
+    display = {}
+    for k, (pid, name) in enumerate(DISPLAY):
+        if by_index.get(pad + k) != name:
+            sys.exit("gen_skin: parameter %d should be %s (%r) but is %r; update DISPLAY"
+                     % (pad + k, pid, name, by_index.get(pad + k)))
+        display[pid] = pad + k
+    return controls, display
+
+
+# ---- SKY (spec 8.1) ----
+
+CREAM, DIM, RED = L.argb(L.CREAM), L.argb(L.DIM), L.argb(L.ACCENT)
+CENTRED = "horizontallyCentred verticallyCentred"
+
+# The bottom strip: MAIN's 16 controls in 4 groups of 4, group g on the g-th knob row from the top (Q-Links 13-16,
+# 9-12, 5-8, 1-4), the same knobs as on the old MAIN page. (strip name, parameter, overlay)
+SKY_STRIP = [
+    ("FILTER", "Filter", "knob overlay bipolar"), ("EVOLVE", "Evolve", "knob overlay"),
+    ("MOTION", "Motion", "knob overlay"), ("DRIFT", "Drift", "menu overlay"),
+    ("ENERGY", "Energy", "knob overlay bipolar"), ("WET", "Wet", "knob overlay bipolar"),
+    ("SWEEP", "Sweep", "knob overlay"), ("VOLUME", "Volume", "knob overlay"),
+    ("DRONE", "Drone", "knob overlay"), ("SEQ", "Sequence", "knob overlay"),
+    ("LEAD", "Lead", "knob overlay"), ("SEQ 2", "Sequence 2", "knob overlay"),
+    ("PIECE", "Piece", "menu overlay"), ("TEMPO", "Tempo", "knob overlay"),
+    ("ROOT", "Root", "menu overlay"), ("MODE", "Mode", "menu overlay"),
+]
+SKY_OVERLAYS = ("knob overlay", "knob overlay bipolar", "menu overlay")
+SKY_CELL = {"knob overlay": "sky knob", "knob overlay bipolar": "sky knob bipolar", "menu overlay": "sky menu"}
+
+
+def sky_qlink(i):
+    """The Q-Link (1..16) of strip cell i: group g on knob row g from the top."""
+    g, k = divmod(i, 4)
+    return 13 - 4 * g + k
+
+
+def sky_qlink_bounds():
+    """One rectangle per group, in bank order (RowTopDown: bank 1 is Q-Links 13-16, the first group)."""
+    m = 4
+    return [L.rect_str((x - m, y - m, w + 2 * m, h + 2 * m)) for x, y, w, h in L.STRIP_GROUPS]
+
+
+def sky_cell_rect(i):
+    """A strip cell's touch area: its name and its value."""
+    x, y, w, _ = L.STRIP_NAMES[i]
+    vx, vy, vw, vh = L.STRIP_VALUES[i]
+    return (x, y, w, vy + vh - y)
+
+
+def style(height, weight, colour, just="left verticallyCentred", case="Original"):
+    st = text_style(height, weight, colour, case)
+    st["justification"] = just
+    return st
+
+
+def text(name, kind, handle, rect, st):
+    """A Label: kind "Value" shows the handle's display text, "Name" its name (WithName[...] for fixed text)."""
+    return entry(name, "Label", {"version": 1, "textStyle": st, "type": kind, "handleName": handle}, L.rect_str(rect))
+
+
+def image(name, file, rect, frames=None, handle=None):
+    """A Regular image at its native size, or a film strip whose frame follows handle."""
+    if frames is None:
+        data = {"version": 2, "imageType": "Regular", "colour": "0", "image": file}
+    else:
+        data = {"version": 2, "imageType": "FilmStrip", "colour": "0", "image": file, "numFrames": frames,
+                "handleName": handle}
+    return entry(name, "Image", data, L.rect_str(rect))
+
+
+def sky_cell_definitions():
+    """The strip's value cell (Kolo's value label): a tap focuses its Q-Link bank, a double tap or Enter opens the
+    overlay, the data wheel changes it. The name label lies under it, outside the component."""
+    defs = []
+    w, h = L.CELL_W, L.STRIP_VALUE_Y + L.STRIP_VALUE_H - L.STRIP_NAME_Y
+    vy = L.STRIP_VALUE_Y - L.STRIP_NAME_Y
+    for overlay in SKY_OVERLAYS:
+        actions = [{"version": 1, "onAction": on, "handler": handler, "handleName": "Data", "additionalData": extra}
+                   for on, handler, extra in (("Mouse Down", "Q-Link", ""), ("Double Click", "Show Overlay", overlay),
+                                              ("Enter Pressed", "Show Overlay", overlay))]
+        focus = entry("focus", "Focus", {"version": 1, "backgroundColour": "14" + CREAM[2:], "outlineColour": RED,
+                                         "backgroundInset": 2.0, "outlineThickness": 1.0}, "0 0 %d %d" % (w, h))
+        focus["bounds"]["whenVisible"] = "WhenFocussed"
+        value = entry("value", "Label", {"version": 1, "textStyle": style(22, "SemiBold", CREAM, CENTRED),
+                                         "type": "Value", "handleName": "Data"},
+                      "0 %d %d %d" % (vy, w, L.STRIP_VALUE_H))
+        clear = {"version": 1, "colour": "00000000", "image": ""}
+        defs.append({"key": SKY_CELL[overlay], "value": {
+            "version": 2, "actions": actions, "backgroundData": {"version": 1, "focussed": clear, "unfocussed": clear},
+            "ignoreMousePresses": False, "disableCoarseDataWheel": False, "componentsData": [focus, value]}})
+    return defs
+
+
+def sky_tab(c, d):
+    """SKY, bottom of the z-order first. c: control indices by name; d: display parameter indices by id."""
+    P = lambda i: "Parameter %d" % i
+    comps = [image("background", "bg_sky.png", (0, 0, L.SCREEN_W, L.SCREEN_H))]
+    # The particles (R12): pucks 1-4 are the Sequence on the inner orbit, 5-8 Sequence 2 on the outer. Parked
+    # pucks sit at (0.5, 0.5), behind the disc.
+    for i in range(1, 9):
+        pad = L.ORBIT_INNER if i <= 4 else L.ORBIT_OUTER
+        comps.append(entry("puck %d" % i, "XYPad", {"version": 1, "xPositionHandle": P(d["d_px%d" % i]),
+                                                     "yPositionHandle": P(d["d_py%d" % i]), "image": "puck.png"},
+                           L.rect_str(pad)))
+    comps.append(image("disc", "disc.png", L.DISC))
+    comps.append(image("ring", "ring.png", L.RING, L.ASSETS["ring.png"][2], P(d["d_ring"])))
+    comps.append(text("chord", "Value", P(d["d_chord"]), L.CHORD_TEXT, style(36, "Bold", CREAM, CENTRED)))
+    # The constellation.
+    for i in range(8):
+        comps.append(image("slot %d" % (i + 1), "star.png", L.SLOT_STARS[i], L.ASSETS["star.png"][2],
+                           P(d["d_slot%d" % (i + 1)])))
+        comps.append(text("slot chord %d" % (i + 1), "Value", P(d["d_slotname%d" % (i + 1)]), L.SLOT_LABELS[i],
+                          style(18, "SemiBold", CREAM, CENTRED)))
+    # The left column (its captions ARC, PHRASE, NEXT, LOG are in bg_sky).
+    comps += [
+        text("section", "Value", P(d["d_section"]), L.ARC_VALUE, style(30, "Bold", CREAM)),
+        image("phrase", "phrase.png", L.PHRASE_STRIP, L.ASSETS["phrase.png"][2], P(d["d_phrase"])),
+        text("evolve", "Value", P(d["d_evolve"]), L.EVOLVE_TEXT, style(20, "Regular", CREAM)),
+        text("next chord", "Value", P(d["d_next"]), L.NEXT_CHORD, style(32, "Bold", CREAM)),
+        text("next in", "Value", P(d["d_next_in"]), L.NEXT_IN, style(20, "Regular", CREAM)),
+        text("progression", "Value", P(d["d_prog"]), L.NEXT_PROG, style(20, "Regular", DIM)),
+    ]
+    for i in range(3):
+        comps.append(text("log %d" % (i + 1), "Value", P(d["d_log%d" % (i + 1)]), L.LOG_LINES[i],
+                          style(20, "Regular", CREAM)))
+    # The right column: the five planets and their names.
+    for i, name in enumerate(L.PLANET_NAMES):
+        h = P(d["d_planet%d" % (i + 1)])
+        comps.append(image("planet %d" % (i + 1), "planet.png", L.PLANETS[i], L.ASSETS["planet.png"][2], h))
+        comps.append(text("planet %d name" % (i + 1), "Name", "WithName[%s]/%s" % (name, h), L.PLANET_LABELS[i],
+                          style(18, "SemiBold", DIM)))
+    # The bottom strip: each name under its cell (a label drawn over a control takes its touches).
+    for i, (title, pname, overlay) in enumerate(SKY_STRIP):
+        comps.append(text("strip %s name" % title.lower(), "Name", "WithName[%s]/%s" % (title, P(c[pname])),
+                          L.STRIP_NAMES[i], style(15, "SemiBold", DIM, CENTRED)))
+    for i, (title, pname, overlay) in enumerate(SKY_STRIP):
+        cell = entry("strip " + title.lower(), SKY_CELL[overlay], {"version": 1, "handleName": "Data"},
+                     L.rect_str(sky_cell_rect(i)), "Yes")
+        cell["handle remapping"]["map"] = [{"key": "Data", "value": P(c[pname])}]
+        cell["bounds"]["showWhenDataModelInvalid"] = "Hide"
+        comps.append(cell)
+    # The header.
+    hy, hh = 8, 40
+    comps += [
+        text("title shostak", "Name", "WithName[SHOSTAK]/%s" % P(c["Piece"]), (24, hy, 110, hh),
+             style(24, "Bold", RED)),
+        text("title third planet", "Name", "WithName[· THIRD PLANET]/%s" % P(c["Piece"]), (132, hy, 220, hh),
+             style(24, "Regular", CREAM)),
+        text("piece", "Value", P(c["Piece"]), (372, hy, 210, hh), style(26, "SemiBold", CREAM)),
+        text("tempo", "Value", P(c["Tempo"]), (590, hy, 60, hh), style(26, "SemiBold", CREAM, "right verticallyCentred")),
+        text("clock", "Value", P(d["d_ext"]), (658, hy, 60, hh), style(26, "SemiBold", CREAM)),
+        text("root", "Value", P(c["Root"]), (726, hy, 50, hh), style(26, "SemiBold", CREAM, "right verticallyCentred")),
+        text("mode", "Value", P(c["Mode"]), (784, hy, 140, hh), style(26, "SemiBold", CREAM)),
+        text("hold", "Value", P(d["d_hold"]), (936, hy, 72, hh), style(22, "Bold", RED)),
+        text("lock", "Value", P(d["d_lock"]), (1010, hy, 72, hh), style(22, "Bold", RED)),
+        text("source", "Value", P(d["d_source"]), (1090, hy, 166, hh), style(20, "SemiBold", DIM, "right verticallyCentred")),
+    ]
+    # Last, the cover: a blank Name label over the orbits, so a finger moves no puck (spike run 4).
+    comps.append(text("cover", "Name", "WithName[ ]/%s" % P(d["d_source"]), L.COVER,
+                      style(10, "Regular", "00000000")))
+    clear = {"version": 1, "colour": L.argb(L.BG), "image": ""}
+    return {"version": 1, "tabName": "SKY", "fnKeyIndex": 0, "fnKeySubIndex": 0,
+            "componentDefinition": {"version": 2, "actions": [],
+                                    "backgroundData": {"version": 1, "focussed": clear, "unfocussed": clear},
+                                    "ignoreMousePresses": False, "disableCoarseDataWheel": False,
+                                    "componentsData": comps},
+            "qlinkBoundsData": sky_qlink_bounds()}
+
+
+def sky_qlinks(c):
+    m = {"Q-Link %d" % n: -1 for n in range(1, 17)}
+    for i, (_, pname, _) in enumerate(SKY_STRIP):
+        m["Q-Link %d" % sky_qlink(i)] = c[pname]
+    return {"Tab": 1, "SubTab": 1, "Bank Direction": "RowTopDown", "Q-Links": m}
+
+
 def main():
     if not os.path.isfile(PARAMS):
         sys.exit("gen_skin: build the plugin first (no %s)" % PARAMS)
     params = json.load(open(PARAMS))
     plist = params["params"]
-    index_of = {p["name"]: p["index"] for p in plist}
+    index_of, disp = parameter_maps(plist)
+    index_of.update({name: disp[pid] for pid, name in DISPLAY[:4]})   # the status line's own four
     for name, *_ in STATUS:
         if name not in index_of:
             sys.exit("gen_skin: no parameter named %r in params.json" % name)
+    for _, pname, _ in SKY_STRIP:
+        if pname not in index_of:
+            sys.exit("gen_skin: no control named %r in params.json" % pname)
 
     with tempfile.TemporaryDirectory() as tmp:
         subprocess.run([sys.executable, GEN_UI, "--params", PARAMS, "--ui", os.path.join(PLUGIN, "ui.json"),
@@ -200,19 +414,42 @@ def main():
         pat[:] = [c for c in pat if not c["componentData"]["name"].startswith("status")] + pattern_steps(p) + status_line(index_of)
         layers = layers_tab(p, tabs[0]["componentDefinition"])
         layers["componentDefinition"]["componentsData"].extend(status_line(index_of))
-        tabs.insert(1, layers)
+        # SKY uses gen_ui's overlays and the choice texts of MAIN's menus, which other pages must still bring.
+        pd = tui["pageData"]
+        defs = pd["componentDefinitions"]["localComponentDefinitions"]
+        missing = set(SKY_OVERLAYS) - {e["key"] for e in defs}
+        if missing:
+            sys.exit("gen_skin: gen_ui no longer writes %s; SKY's strip needs them" % sorted(missing))
+        defs.extend(sky_cell_definitions())
+        repl = {e["key"] for e in pd["replacementStrings"]}
+        for _, pname, overlay in SKY_STRIP:
+            key = "Parameter %d" % index_of[pname]
+            choices = next(q["choices"] for q in plist if q["index"] == index_of[pname])
+            if overlay == "menu overlay" and key not in repl:
+                pd["replacementStrings"].append({"key": key, "value": choices})
+        tabs[:] = [sky_tab(index_of, disp), tabs[0], layers] + tabs[1:]
         for i, t in enumerate(tabs):
             t["fnKeyIndex"] = i
         png_copy(tmp, "button_on.png", "button_off.png", "seg4_on.png", "seg4_off.png")
+        gen_art.generate(tmp)
         ql_path = os.path.join(tmp, "Q-Links.json")
         ql = json.load(open(ql_path))
-        m = ql["Screen Mode Q-Links"]["map"]
-        for e in m:
-            if e["Tab"] >= 2:
-                e["Tab"] += 1
-        m.insert(1, dict(m[0], Tab=2, **{"Q-Links": {"Q-Link %d" % (i + 1): -1 for i in range(16)}}))
+        # gen_ui numbered its map by its own tab order (names); renumber it by the final order.
+        by_name = {names[e["Tab"] - 1]: e for e in ql["Screen Mode Q-Links"]["map"]}
+        blank = {"Q-Link %d" % (i + 1): -1 for i in range(16)}
+        m = []
+        for i, t in enumerate(tabs):
+            if t["tabName"] == "SKY":
+                e = sky_qlinks(index_of)
+            elif t["tabName"] in by_name:
+                e = by_name[t["tabName"]]
+            else:
+                e = {"Tab": 0, "SubTab": 1, "Bank Direction": "Column", "Q-Links": dict(blank)}
+            e["Tab"] = i + 1
+            m.append(e)
+        ql["Screen Mode Q-Links"]["map"] = m
         # (no one-shot on a Q-Link: a knob turned would fire it again and again as it goes back to Off)
-        one_shot = {index_of[n] for n in index_of if ONE_SHOT.match(n)}
+        one_shot = {index_of[n] for n in index_of if ONE_SHOT.match(n) and index_of[n] < disp["d_pad"]}
         for e in m:
             for k, v in e["Q-Links"].items():
                 if v in one_shot:
@@ -226,7 +463,6 @@ def main():
             json.dump(tui, f, indent=2)
             f.write("\n")
     print("gen_skin: wrote %s (%d pages)" % (OUT, len(tui["pageData"]["tabs"])))
-
 
 if __name__ == "__main__":
     main()

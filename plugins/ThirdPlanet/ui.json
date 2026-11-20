@@ -19,27 +19,6 @@
       ]
     },
     {
-      "name": "MAIN",
-      "controls": [
-        { "param": "Filter", "widget": "knob", "polarity": "bipolar" },
-        { "param": "Evolve", "widget": "knob" },
-        { "param": "Motion", "widget": "knob" },
-        { "param": "Drift", "widget": "slider", "overlay": "menu" },
-        { "param": "Energy", "widget": "knob", "polarity": "bipolar" },
-        { "param": "Wet", "widget": "knob", "polarity": "bipolar" },
-        { "param": "Sweep", "widget": "knob" },
-        { "param": "Volume", "widget": "knob" },
-        { "param": "Drone", "widget": "fader" },
-        { "param": "Sequence", "widget": "fader" },
-        { "param": "Lead", "widget": "fader" },
-        { "param": "Sequence 2", "widget": "fader" },
-        { "param": "Piece", "widget": "slider", "overlay": "menu" },
-        { "param": "Tempo", "widget": "knob" },
-        { "param": "Root", "widget": "slider", "overlay": "menu" },
-        { "param": "Mode", "widget": "slider", "overlay": "menu" }
-      ]
-    },
-    {
       "name": "DRONE",
       "controls": [
         { "param": "Pedal", "widget": "knob" },
