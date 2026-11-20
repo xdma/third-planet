@@ -178,6 +178,19 @@ class GenArtTest(unittest.TestCase):
             for name in cells:
                 self.assertLessEqual(gen_art.text_width(name, 2), w - 6, name)
 
+    def assert_plain(self, name, rects):
+        _, _, rows = self.png(name)
+        bg = bytes(layout.BG)
+        for (x, y, w, h) in rects:
+            for yy in range(y, y + h):
+                self.assertEqual(rows[yy][4 * x:4 * (x + w)], bg * w, "%s: art under the widget at %s, row %d"
+                                 % (name, (x, y, w, h), yy))
+
+    def test_nothing_under_live_widgets(self):
+        """No field star, line or caption under a SKY or CHORDS widget (text and strips must read clean)."""
+        self.assert_plain("bg_sky.png", layout.SKY_LIVE_RECTS)
+        self.assert_plain("bg_chords.png", layout.CHORDS_STARS + layout.CHORDS_LABELS)
+
     def test_layout_clear_of_black(self):
         """The slot stars, their labels and lines are outside the black area by layout, not by clipping."""
         for (x, y, w, h) in layout.SLOT_STARS + layout.SLOT_LABELS:

@@ -317,13 +317,27 @@ def caption(c, text, x, y, colour=L.DIM, rule_to=None):
         c.hline(x + w + 10, rule_to, y + text_height(L.CAPTION_SCALE) // 2, L.FAINT)
 
 
-def constellation(c, centres, gap):
-    """The static lines between neighbouring slot stars, stopping short of each star."""
+def constellation(c, centres, gap, labels):
+    """The static lines between neighbouring slot stars, stopping short of each star and of every label
+    rect (the longest stretch of each line clear of them is drawn)."""
     segs = []
     for (x0, y0), (x1, y1) in zip(centres, centres[1:]):
         d = math.hypot(x1 - x0, y1 - y0)
         ux, uy = (x1 - x0) / d, (y1 - y0) / d
-        seg = (x0 + ux * gap, y0 + uy * gap, x1 - ux * gap, y1 - uy * gap)
+        best, run = None, None
+        n = int(d * 2)
+        for i in range(n + 1):
+            t = gap + (d - 2 * gap) * i / n
+            x, y = x0 + ux * t, y0 + uy * t
+            if any(_near_rect(x, y, r, 4) for r in labels):
+                run = None
+                continue
+            run = (run[0], t) if run else (t, t)
+            if best is None or run[1] - run[0] > best[1] - best[0]:
+                best = run
+        if best is None or best[1] - best[0] < 4:
+            continue
+        seg = (x0 + ux * best[0], y0 + uy * best[0], x0 + ux * best[1], y0 + uy * best[1])
         c.line(*seg, colour=L.DIM, width=1.0, alpha=0.55)
         segs.append(seg)
     return segs
@@ -367,13 +381,13 @@ def bg_sky():
     for text, x, y in L.SKY_CAPTIONS:
         caption(c, text, x, y, rule_to=L.CAPTION_RULE_X1)
     c.hline(L.RULE_X0, L.RULE_X1, L.STRIP_RULE_Y, L.FAINT)
-    segs = constellation(c, L.SLOT_CENTRES, L.CONSTELLATION_GAP)
+    segs = constellation(c, L.SLOT_CENTRES, L.CONSTELLATION_GAP, L.SLOT_STARS + L.SLOT_LABELS)
     star_rx, star_ry = L.BLACK_RX + 10, L.BLACK_RY + 10
 
     def avoid(x, y):
         return (((x - L.SKY_CX) / star_rx) ** 2 + ((y - L.SKY_CY) / star_ry) ** 2 <= 1.0
                 or any(math.hypot(x - sx, y - sy) < 24 for sx, sy in L.SLOT_CENTRES)
-                or any(_near_rect(x, y, r, 4) for r in L.SLOT_LABELS)
+                or any(_near_rect(x, y, r, 6) for r in L.SKY_LIVE_RECTS)
                 or any(_seg_dist(x, y, s) < 7 for s in segs))
     field_stars(c, L.SKY_STAR_FIELD, L.SKY_STAR_COUNT, avoid, seed=1729)
     # The orbit area stays pure black whatever was drawn above (spike run 4: pucks over black cost +2.7,
@@ -399,7 +413,7 @@ def bg_deck():
 
 def bg_chords():
     c = bg_plain()
-    segs = constellation(c, L.CHORDS_CENTRES, L.CHORDS_GAP)
+    segs = constellation(c, L.CHORDS_CENTRES, L.CHORDS_GAP, L.CHORDS_STARS + L.CHORDS_LABELS)
 
     def avoid(x, y):
         return (any(math.hypot(x - sx, y - sy) < 30 for sx, sy in L.CHORDS_CENTRES)

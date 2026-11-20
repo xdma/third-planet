@@ -164,8 +164,12 @@ STRIP_VALUES = [(strip_cell(i), STRIP_VALUE_Y, CELL_W, STRIP_VALUE_H) for i in r
 STRIP_GROUPS = [(strip_cell(4 * g), STRIP_NAME_Y, 4 * CELL_W, STRIP_VALUE_Y + STRIP_VALUE_H - STRIP_NAME_Y)
                 for g in range(4)]
 
-# The faint field stars of bg_sky: only in this band, never in the black area, never near a slot star,
-# a label, a constellation line or text.
+# Where SKY's live widgets go: bg_sky leaves these pure black (no field star, line or caption under them).
+SKY_LIVE_RECTS = (SLOT_STARS + SLOT_LABELS + PLANETS + PLANET_LABELS + LOG_LINES + STRIP_NAMES + STRIP_VALUES
+                  + [ARC_VALUE, PHRASE_STRIP, EVOLVE_TEXT, NEXT_CHORD, NEXT_IN, NEXT_PROG])
+
+# The faint field stars of bg_sky: only in this band, never in the black area, never near a live widget or a
+# constellation line.
 SKY_STAR_FIELD = (334, 64, 1016 - 334, STRIP_RULE_Y - 8 - 64)
 SKY_STAR_COUNT = 70
 
