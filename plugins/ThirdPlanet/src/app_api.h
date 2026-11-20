@@ -116,6 +116,32 @@ uint32_t perfMoves();             // PERFORM's moves held (EN_PF_*)
 const char* fxName(int fx);
 const char* moveName(int move);
 
+// Readouts for the star-chart screen (docs/superpowers/specs/2026-11-20-third-planet-screen-design.md). Each reads
+// what the engine and ui.c already keep; nothing changes. An index out of range reads 0 (or the empty state).
+int section();                    // the arc's section, EN_SEC_* (0..3; EN_SEC_NAME names it)
+int phraseBar();                  // the bar of the phrase, 0..7
+int evolveChance();               // percent of phrases Evolve nudges now (ui.c nudge_tick); 0 while locked, held or resting
+float layerActivity(int layer);   // how much the layer sounds now, 0..1 (layer < kNumLayers)
+bool layerHeard(int layer);       // the layer not muted and not soloed out (ui.c perf_sounds)
+float filterDrift(int layer);     // the layer's filter drift, in octaves
+int densityShift();               // Density's slow drift, in its units (+ denser, - sparser)
+uint32_t seqHits(int seq);        // each sequence's notes so far (seq 0..1)
+uint32_t seqReps(int seq);        // each sequence's repeats so far
+int ringDots(bool* lastBar);      // ui.c ring_dots: the chord's progress in dots, 0..32, -1 no ring (Drift Hold);
+                                  // *lastBar: the chord's last bar
+int progPos();                    // the slot the progression is on (0..7; Endless: 0), -1 none
+bool loopMode();                  // Loop (the slots in turn), else Endless
+int progCount();                  // how far the slots run in Loop: to the last that isn't a gap (ui.c prog_count)
+int walkCharacter();              // the walk's character (EN_WALK_*)
+enum SlotState { kSlotGap, kSlotWalk, kSlotWritten };
+SlotState slotState(int i);       // the Chords page's slot i (0..7)
+int slotChordCode(int i);         // slot i's chord in chordCode()'s numbers, named as ui.c slot_label names it
+                                  // (written: its root, kind and type; the walk's: its pitch classes); 0 for a gap
+int nextChordCode();              // the chord the next change brings (Endless: slot 1's; Loop: the next non-gap slot's)
+int barsToChange();               // bars left of this chord, the one playing counted; -1 at Drift Hold
+int loopStep(int seq);            // the step a sequence plays (seq 0..1)
+const char* slotLabel(int i, char* buf);   // (tests) ui.c's own slot_label(); buf: kChordTextMax
+
 // The project as the FM-1 would save it (bytes, or -1 if max is too small).
 int snapshot(uint8_t* dst, int max);
 

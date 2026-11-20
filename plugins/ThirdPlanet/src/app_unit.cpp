@@ -255,16 +255,17 @@ static int chordMaskCode(const int* pcs, int n)
         iv |= 1u << ((pcs[i] - pcs[0] + 12) % 12);   // (as en_chord_name reads them)
     return 1 + (pcs[0] % 12) * 4096 + (int)(iv & 0xFFFu);
 }
+static int chordLabelCode(int r, int q, int x)   // a root, kind and type, as en_chord_label names them
+{
+    return kChordLabelBase + (((unsigned)r < 12u ? r : 0) * EN_NCQ + ((unsigned)q < EN_NCQ ? q : 0)) * EN_NCX +
+           ((unsigned)x < EN_NCX ? x : 0);
+}
 int chordCode()
 {
     const int s = en_chord_slot;
     int pcs[EN_NPAD + 1];
     if (s >= 0 && s < EN_NPROG && proj.par[P_CQ0 + s])   // a written slot (slot_label: a kind set is never a walk slot)
-    {
-        const int r = proj.par[P_CR0 + s], q = proj.par[P_CQ0 + s], x = proj.par[P_CX0 + s];
-        return kChordLabelBase + (((unsigned)r < 12u ? r : 0) * EN_NCQ + ((unsigned)q < EN_NCQ ? q : 0)) * EN_NCX +
-               ((unsigned)x < EN_NCX ? x : 0);
-    }
+        return chordLabelCode(proj.par[P_CR0 + s], proj.par[P_CQ0 + s], proj.par[P_CX0 + s]);
     pcs[0] = en_chord_root;
     for (int k = 0; k < EN_NPAD; k++)
         pcs[k + 1] = en_chord[k] % 12;
@@ -426,6 +427,83 @@ static_assert(EN_MV_RISE == 1 && EN_MV_CLOSE == 2 && EN_MV_TRANSPOSE == 4 && EN_
 uint32_t perfMoves() { return ui.moves; }
 const char* fxName(int e) { return e >= 0 && e < EN_NFX ? EN_FX_NAME[e] : ""; }
 const char* moveName(int m) { return m >= 0 && m < kNumMoves ? MOVE_NAME[m] : ""; }
+
+// Readouts for the star-chart screen: what the engine and ui.c keep, read and never changed.
+int section() { return en_section; }
+int phraseBar() { return en_phrase_bar; }
+int evolveChance()   // (ui.c nudge_tick: Evolve 100, 40% of the phrases; 70, 20%; 40 and under, none)
+{
+    const int ev = proj.par[P_EVOLVE];
+    if (ev <= 40 || ui.lock || en_frozen || !en_playing) return 0;
+    return (ev - 40) * 2 / 3;
+}
+float layerActivity(int l) { return l >= 0 && l < NLAYER ? en_layer_act[l] : 0.0f; }
+bool layerHeard(int l) { return l >= 0 && l < NLAYER && perf_sounds(l); }
+float filterDrift(int l) { return l >= 0 && l < NLAYER ? en_fo[l] : 0.0f; }
+int densityShift() { return en_dd_shift; }
+uint32_t seqHits(int q) { return q >= 0 && q < 2 ? en_seq_hits[q] : 0u; }
+uint32_t seqReps(int q) { return q >= 0 && q < 2 ? en_seq_reps[q] : 0u; }
+// ring_dots keeps what it last showed while held: called here too, it is called with the same inputs as the app's
+// drawing, so both see the same ring (test_screen ring_matches_ui).
+int ringDots(bool* lastBar)
+{
+    int last = 0;
+    const int n = ring_dots(&last);
+    if (lastBar) *lastBar = last != 0;
+    return n;
+}
+int progPos() { return en_prog_pos; }
+bool loopMode() { return (proj.par[P_PMODE] & EN_PLOOP) != 0; }
+int progCount() { return prog_count(); }
+int walkCharacter() { return proj.par[P_PMODE] & 3; }
+SlotState slotState(int i)
+{
+    if (i < 0 || i >= EN_NPROG || slot_is_gap(i)) return kSlotGap;
+    return slot_is_walk(i) ? kSlotWalk : kSlotWritten;
+}
+int slotChordCode(int i)
+{
+    switch (slotState(i))
+    {
+    case kSlotWritten: return chordLabelCode(proj.par[P_CR0 + i], proj.par[P_CQ0 + i], proj.par[P_CX0 + i]);
+    case kSlotWalk:   // (slot_label's pitch classes, not walk_written's chord: on piece 9 they name differently)
+    {
+        int pcs[EN_NPAD + 1], iv[4], t[4];
+        const int d = (proj.par[P_CR0 + i] - 1) % scale_steps();
+        en_chord_tones(proj.pool, proj.par[P_ROOT], d, t);
+        en_voicing(proj.pool, d, proj.par[P_CX0 + i] & 1, iv);
+        pcs[0] = t[0];
+        for (int k = 0; k < EN_NPAD; k++)
+            pcs[k + 1] = (t[0] + iv[k]) % 12;
+        return chordMaskCode(pcs, EN_NPAD + 1);
+    }
+    default: return 0;
+    }
+}
+int nextChordCode()   // (en_chord_change: Endless moves slot 1 down to 0 and plays it; Loop plays the slots in turn)
+{
+    if (!loopMode()) return slotChordCode(1);
+    const int n = prog_count(), p = en_prog_pos;   // (-1 before the first: from slot 0)
+    for (int k = 1; k <= n; k++)
+    {
+        const int i = (p + k) % n;
+        if (!slot_is_gap(i)) return slotChordCode(i);
+    }
+    return 0;
+}
+int barsToChange()   // (the bars gone as ring_dots counts them, so the count and its last bar agree)
+{
+    const int db = en_drift_bars(proj.par[P_DRIFT]);
+    if (!db) return -1;
+    const int k = (int)(en_drift * (float)db + 0.5f);
+    return k >= db ? 0 : db - k;
+}
+int loopStep(int q) { return q >= 0 && q < 2 ? en_loop_pos[q] : 0; }
+const char* slotLabel(int i, char* buf)
+{
+    buf[0] = 0;
+    return i >= 0 && i < EN_NPROG ? slot_label(i, buf) : buf;
+}
 
 // The project as a save would write it: the piece playing kept into its slot (with its patterns), then the
 // whole struct. keep() changes nothing the music reads until the next piece change, which keeps again.
