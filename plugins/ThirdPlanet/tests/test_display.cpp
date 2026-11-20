@@ -2,7 +2,7 @@
 // Third Planet's status line (the display parameters appended after the controls):
 //   1. the chord's number makes exactly the name the FM-1's own screen shows (ui.c chord_now), on every
 //      piece, with the walk's characters, in Endless and in Loop;
-//   2. the plugin sends the page, the chord, PERFORM and Hold as they change, from the panel's notes;
+//   2. the plugin sends the Pad, the chord, Hold and Lock as they change, from the pads and the switches;
 //   3. a value the MPC writes over a status value is corrected on the next block;
 //   4. a second instance shows that another one plays, and nothing else.
 //   c++ -std=c++17 -O2 -I plugins/ThirdPlanet/src -I deps/mpc-plugin-sdk/framework \
@@ -70,12 +70,12 @@ std::string text(ThirdPlanet& p, int i)
     return p.param(i).choices[(size_t)p.getInt(i)];
 }
 
-// A button tapped (held 100 ms) at `t` seconds.
-void tap(std::vector<Ev>& evs, double t, int button)
+int idx(const char* id)
 {
-    const long f = (long)(t * 44100.0);
-    evs.push_back({f, 0x90, kButtonNote0 + button, 100});
-    evs.push_back({f + 4410, 0x80, kButtonNote0 + button, 0});
+    for (int i = 0; i < tp::kNumControls; ++i)
+        if (!std::strcmp(tp::kParams[i].id, id)) return i;
+    std::printf("no parameter %s\n", id);
+    std::exit(2);
 }
 
 void chordNames()
@@ -140,49 +140,42 @@ void statusLine()
 {
     auto p = make();
     runPlugin(*p, 44100);
-    CHECK(p->getInt(kDispPage) == tp::app::view() + 1, "page %d, view %d", p->getInt(kDispPage), tp::app::view());
-    CHECK(text(*p, kDispPage) == "Nachtfahrt", "page shows '%s'", text(*p, kDispPage).c_str());
+    CHECK(text(*p, kDispPad) == " ", "Pad shows '%s' before any pad", text(*p, kDispPad).c_str());
     char now[64];
     tp::app::chordNow(now);
     CHECK(text(*p, kDispChord) == now, "chord shows '%s', the FM-1 '%s'", text(*p, kDispChord).c_str(), now);
-    CHECK(text(*p, kDispPerform) == " " && text(*p, kDispHold) == " ", "PERFORM or Hold shown at power-on");
+    CHECK(text(*p, kDispHold) == " " && text(*p, kDispLock) == " ", "Hold or Lock shown at power-on");
 
-    std::vector<Ev> evs;
-    tap(evs, 0.2, tp::app::kSEL);   // PERFORM
-    tap(evs, 0.6, tp::app::kREC);   // Hold
-    runPlugin(*p, 44100, evs);
-    CHECK(tp::app::perform() && tp::app::held(), "the taps did not reach the app");
-    CHECK(text(*p, kDispPerform) == "PERFORM", "perform shows '%s'", text(*p, kDispPerform).c_str());
-    CHECK(text(*p, kDispHold) == "HOLD", "hold shows '%s'", text(*p, kDispHold).c_str());
-    CHECK(p->getInt(kDispPage) == tp::app::view() + 1, "page %d after PERFORM, view %d", p->getInt(kDispPage), tp::app::view());
-
-    evs.clear();
-    tap(evs, 0.2, tp::app::kSEL);
-    tap(evs, 0.6, tp::app::kREC);
-    tap(evs, 1.0, tp::app::kENV);   // the Drone's page
-    runPlugin(*p, 66150, evs);
-    CHECK(text(*p, kDispPerform) == " " && text(*p, kDispHold) == " ", "PERFORM '%s' Hold '%s' after both off",
-          text(*p, kDispPerform).c_str(), text(*p, kDispHold).c_str());
-    CHECK(text(*p, kDispPage) == tp::app::viewName(tp::app::view()) && tp::app::view() != 0, "page shows '%s', view %d",
-          text(*p, kDispPage).c_str(), tp::app::view());
+    runPlugin(*p, 44100, {{4410, 0x90, 55, 100}, {8820, 0x80, 55, 0}});   // the Shimmer pad
+    CHECK(text(*p, kDispPad) == "Shimmer", "Pad shows '%s' after the Shimmer pad", text(*p, kDispPad).c_str());
+    p->set(idx("hold"), 1.0f), p->set(idx("lock"), 1.0f);
+    runPlugin(*p, 4410);
+    CHECK(text(*p, kDispHold) == "HOLD" && text(*p, kDispLock) == "LOCK", "Hold '%s' Lock '%s' after both on",
+          text(*p, kDispHold).c_str(), text(*p, kDispLock).c_str());
+    p->set(idx("hold"), 0.0f), p->set(idx("lock"), 0.0f);
+    runPlugin(*p, 4410);
+    CHECK(text(*p, kDispHold) == " " && text(*p, kDispLock) == " ", "Hold '%s' Lock '%s' after both off",
+          text(*p, kDispHold).c_str(), text(*p, kDispLock).c_str());
 
     // The MPC writes over a status value (a load, automation): the true one comes back.
-    const int page = p->getInt(kDispPage);
-    p->setNormalised(kDispPage, 0.0f);
+    const int pad = p->getInt(kDispPad);
+    p->setNormalised(kDispPad, 0.0f);
     p->setNormalised(kDispHold, 1.0f);
     runPlugin(*p, 4410 + 256);
-    CHECK(p->getInt(kDispPage) == page && p->getInt(kDispHold) == 0, "status not corrected: page %d hold %d",
-          p->getInt(kDispPage), p->getInt(kDispHold));
+    CHECK(p->getInt(kDispPad) == pad && p->getInt(kDispHold) == 0, "status not corrected: pad %d hold %d",
+          p->getInt(kDispPad), p->getInt(kDispHold));
 
     // A second instance: the message, nothing else.
     auto q = make();
     runPlugin(*q, 4410);
-    CHECK(text(*q, kDispPage) == kBusyText, "second instance's page shows '%s'", text(*q, kDispPage).c_str());
-    CHECK(text(*q, kDispChord) == " " && text(*q, kDispPerform) == " " && text(*q, kDispHold) == " ",
+    CHECK(text(*q, kDispPad) == kBusyText, "second instance's Pad shows '%s'", text(*q, kDispPad).c_str());
+    CHECK(text(*q, kDispChord) == " " && text(*q, kDispHold) == " " && text(*q, kDispLock) == " ",
           "second instance shows a status");
     p.reset();   // the owner removed: the second takes over and shows its own status
     runPlugin(*q, 44100);
-    CHECK(q->getInt(kDispPage) == tp::app::view() + 1, "after taking over, page %d view %d", q->getInt(kDispPage), tp::app::view());
+    tp::app::chordNow(now);
+    CHECK(text(*q, kDispPad) == " " && text(*q, kDispChord) == now, "after taking over, Pad '%s' chord '%s'",
+          text(*q, kDispPad).c_str(), text(*q, kDispChord).c_str());
 }
 
 } // namespace

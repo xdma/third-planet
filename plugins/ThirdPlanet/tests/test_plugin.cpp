@@ -2,7 +2,7 @@
 // Third Planet's plugin glue (ThirdPlanet.cpp) over the FM-1 app:
 //   1. its output is the app's own, bit for bit, at any block size (so the glue sends the app nothing by itself:
 //      no parameter echo, no stray input);
-//   2. MIDI notes reach the keys and buttons the same at any block size;
+//   2. pads and notes act the same at any block size (tests/test_controls.cpp: what each one does);
 //   3. parameters reach the app, and what the app changes comes back (a piece's values);
 //   4. the project survives a save and a load;
 //   5. a second instance stays silent while the first owns the engine;
@@ -126,13 +126,12 @@ int main()
         CHECK(d == -1, "block %d differs from the app alone at frame %ld", block, d);
     }
 
-    std::printf("2. keys and buttons, the same at any block size\n");
+    std::printf("2. pads and notes, the same at any block size\n");
     {
-        // a white key, a black key held (an effect), REC tapped (Hold) and again, a note outside (MIDI in)
-        const std::vector<Ev> evs = {{2048 * 40, 0x90, 60, 100}, {2048 * 60, 0x80, 60, 0}, {2048 * 80, 0x90, 54, 100},
-                                     {2048 * 130, 0x80, 54, 0}, {2048 * 150, 0x90, 47, 100}, {2048 * 152, 0x80, 47, 0},
-                                     {2048 * 200, 0x90, 47, 100}, {2048 * 202, 0x80, 47, 0}, {2048 * 230, 0x90, 84, 90},
-                                     {2048 * 250, 0x80, 84, 0}};
+        // (Keys: Pads, Pad base 36) a Lead degree, an effect held, a move held, a note outside the banks (MIDI in)
+        const std::vector<Ev> evs = {{2048 * 40, 0x90, 40, 100}, {2048 * 60, 0x80, 40, 0}, {2048 * 80, 0x90, 55, 100},
+                                     {2048 * 130, 0x80, 55, 0}, {2048 * 150, 0x90, 71, 100}, {2048 * 170, 0x80, 71, 0},
+                                     {2048 * 230, 0x90, 84, 90}, {2048 * 250, 0x80, 84, 0}};
         std::vector<float> first;
         for (int block : {512, 64, 128, 256})
         {
@@ -149,51 +148,6 @@ int main()
                 CHECK(d == -1, "block %d with notes differs from block 512 at frame %ld", block, d);
             }
         }
-    }
-
-    std::printf("2b. each note is the right key or button\n");
-    {
-        auto p = make();
-        runPlugin(*p, 44100, 128);
-        const long tap = 1764;   // 40 ms: a tap
-        auto press = [&](int note, long hold) {
-            runPlugin(*p, 128, 128, {{0, 0x90, note, 100}});
-            runPlugin(*p, hold, 128);
-            runPlugin(*p, 128, 128, {{0, 0x80, note, 0}});
-            runPlugin(*p, 4410, 128);
-        };
-        CHECK(tp::app::playing(), "not playing at start");
-        press(38, tap);   // ENV
-        CHECK(tp::app::view() == 1, "ENV (38) did not open the Drone page: view %d", tp::app::view());
-        press(47, tap);   // REC: Hold
-        CHECK(tp::app::held(), "REC (47) did not Hold");
-        press(47, tap);
-        CHECK(!tp::app::held(), "REC (47) again did not release Hold");
-        runPlugin(*p, 128, 128, {{0, 0x90, 60, 100}});   // a white key, held: the Lead plays it
-        runPlugin(*p, 8820, 128);
-        CHECK(tp::app::leadDegree() >= 0, "white key 60 (key 7) did not play the Lead");
-        runPlugin(*p, 128, 128, {{0, 0x80, 60, 0}});
-        runPlugin(*p, 128, 128, {{0, 0x90, 54, 100}});   // the first black key (F#3, key 1), held: an effect
-        runPlugin(*p, 4410, 128);
-        CHECK(tp::app::effectsHeld() != 0, "black key 54 (key 1) held no effect");
-        runPlugin(*p, 128, 128, {{0, 0x80, 54, 0}});
-        runPlugin(*p, 4410, 128);
-        CHECK(tp::app::effectsHeld() == 0, "the effect stayed after black key 54 was released");
-        press(37, tap);   // SEL: PERFORM
-        CHECK(tp::app::perform(), "SEL (37) did not enter PERFORM");
-        press(38, tap);   // ENV leaves PERFORM
-        CHECK(!tp::app::perform(), "ENV (38) did not leave PERFORM");
-        press(46, tap);   // PLAY: rest
-        CHECK(!tp::app::playing(), "PLAY (46) did not rest the engine");
-        press(46, tap);
-        CHECK(tp::app::playing(), "PLAY (46) again did not start it");
-        press(36, tap);   // FX
-        CHECK(tp::app::view() == 5, "FX (36) did not open Space: view %d", tp::app::view());
-        press(42, tap);   // HOME
-        CHECK(tp::app::view() == 0, "HOME (42) did not open Nachtfahrt: view %d", tp::app::view());
-        p->set(paramIndex("keymode"), 1.0f);   // Keys = Lead: 38 is a Lead note now, not ENV
-        press(38, tap);
-        CHECK(tp::app::view() == 0, "with Keys = Lead, note 38 still pressed ENV: view %d", tp::app::view());
     }
 
     std::printf("3. parameters to the app and back\n");

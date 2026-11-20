@@ -2,6 +2,23 @@
   "kit": "cyan",
   "pages": [
     {
+      "name": "PLAY",
+      "controls": [
+        { "param": "Hold", "widget": "switch" },
+        { "param": "Lock", "widget": "switch" },
+        { "param": "Play", "widget": "switch" },
+        { "param": "Forget", "widget": "switch" },
+        { "param": "Next chord", "widget": "switch" },
+        { "param": "New chords", "widget": "switch" },
+        { "param": "Shake all", "widget": "switch" },
+        { "param": "Reset piece", "widget": "switch" },
+        { "param": "Keys", "widget": "switch" },
+        { "param": "Pad base", "widget": "knob" },
+        { "param": "Sync", "widget": "switch" },
+        "empty"
+      ]
+    },
+    {
       "name": "MAIN",
       "controls": [
         { "param": "Filter", "widget": "knob", "polarity": "bipolar" },
@@ -96,14 +113,35 @@
         { "param": "Seq2 decay", "widget": "knob" },
         { "param": "Seq2 reverb", "widget": "knob" },
         { "param": "Seq2 echo", "widget": "knob" },
+        { "param": "Seq2 width", "widget": "knob" },
+        { "param": "Seq2 time", "widget": "knob" },
+        { "param": "Seq2 rate", "widget": "knob" },
+        { "param": "Seq2 intro", "widget": "knob" },
+        "empty",
+        "empty",
+        "empty",
+        "empty"
+      ]
+    },
+    {
+      "name": "PATTERN",
+      "controls": [
         { "param": "Lane", "widget": "slider", "overlay": "menu" },
         { "param": "Accent", "widget": "knob" },
         { "param": "Lane chance", "widget": "knob" },
         { "param": "Pattern", "widget": "switch" },
-        { "param": "Seq2 width", "widget": "knob" },
-        { "param": "Seq2 time", "widget": "knob" },
-        { "param": "Seq2 rate", "widget": "knob" },
-        { "param": "Seq2 intro", "widget": "knob" }
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty"
       ]
     },
     {
@@ -144,19 +182,19 @@
         { "param": "Memory", "widget": "knob" },
         { "param": "Transpose", "widget": "switch" },
         { "param": "Tune", "widget": "knob", "polarity": "bipolar" },
-        { "param": "Sync", "widget": "switch" },
-        { "param": "Keys", "widget": "switch" }
+        "empty",
+        "empty"
       ]
     },
     {
       "name": "CHORDS",
       "controls": [
         { "param": "Chord slot", "widget": "knob" },
+        { "param": "Chord root", "widget": "slider", "overlay": "menu" },
         { "param": "Chord kind", "widget": "slider", "overlay": "menu" },
         { "param": "Chord type", "widget": "slider", "overlay": "menu" },
         { "param": "Chord play", "widget": "switch" },
         { "param": "Walk", "widget": "switch" },
-        "empty",
         "empty",
         "empty"
       ]

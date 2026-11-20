@@ -290,6 +290,143 @@ void chordText(int code, char* buf)
 }
 const char* chordNow(char* buf) { return chord_now(buf); }
 
+// The MPC's controls for the FM-1's gestures: the code each gesture runs in ui.c, without what it says or draws.
+static_assert(kNumLayers == NLAYER && kNumNudge == NNUDGE && kNumFx == EN_NFX, "app_api.h's counts must be ui.c's");
+static void acted() { ui.act_t = plat_ms(); }
+void setHold(bool on)
+{
+    if (on == (en_frozen != 0)) return;
+    en_freeze(on ? 1 : 0);
+    acted();
+}
+void setLock(bool on)
+{
+    if (on == (ui.lock != 0)) return;
+    lock_toggle();
+    acted();
+}
+bool muted(int l) { return l >= 0 && l < NLAYER && (ui.mutes & LAYER_MUTE[l]) == LAYER_MUTE[l]; }
+void setMute(int l, bool on)
+{
+    if (l < 0 || l >= NLAYER || on == muted(l)) return;
+    if (on) ui.mutes |= LAYER_MUTE[l];
+    else ui.mutes &= ~LAYER_MUTE[l];
+    perf_mutes();
+    acted();
+}
+bool soloed(int l) { return l >= 0 && l < NLAYER && (ui.solo & LAYER_MUTE[l]) == LAYER_MUTE[l]; }
+void setSolo(int l, bool on)
+{
+    if (l < 0 || l >= NLAYER || on == soloed(l)) return;
+    if (on) ui.solo |= LAYER_MUTE[l];
+    else ui.solo &= ~LAYER_MUTE[l];
+    perf_mutes();
+    acted();
+}
+void forget() { en_lead_forget(); acted(); }
+void nextChord() { en_next(); acted(); }
+void newChords() { en_prog_rewalk(); acted(); }
+void shakeAll()
+{
+    static const uint8_t ALL[5] = {0, 1, 2, 3, 5};   // (HOME held on: every layer but the space)
+    nudge_quiet = 1;
+    for (int j = 0; j < 5; j++)
+        nudge(ALL[j], NUDGE_SHAKE);
+    nudge_quiet = 0;
+    acted();
+}
+void resetPiece()
+{
+    project_piece_reset();
+    project_apply();
+    oct_home_take();
+    mac_home();
+    en_regrow();
+    mark_dirty();
+    acted();
+}
+void nudgeLayer(int l, bool shake)
+{
+    if (l < 0 || l >= NNUDGE) return;
+    nudge(l, shake ? NUDGE_SHAKE : NUDGE_HAND);
+    acted();
+}
+bool step(int st) { return st >= 0 && st < 16 && (lane_steps(ui.lane) >> st & 1u); }
+bool accent(int st)
+{
+    const int q = lane_seq(ui.lane);
+    const uint32_t a = proj.par[P_SMODE] ? (uint32_t)(uint16_t)proj.par[P_SACC0 + q] : (uint32_t)en_seq_acc[q];
+    return st >= 0 && st < 16 && (a >> st & 1u);
+}
+void setStep(int st, bool on)
+{
+    if (st < 0 || st >= 16 || on == step(st)) return;
+    pattern_key(STEP_KEY[st], 0);
+    acted();
+}
+void setAccent(int st, bool on)
+{
+    if (st < 0 || st >= 16 || on == accent(st)) return;
+    pattern_key(STEP_KEY[st], 1u << BLACK_KEY[0]);   // (a black key held with it)
+    acted();
+}
+int chordRoot()
+{
+    const int s = ui.slot;
+    if (slot_is_gap(s)) return -1;
+    if (slot_is_walk(s))
+    {
+        int r, q, x;
+        walk_written(s, &r, &q, &x);
+        return ((r % 12) + 12) % 12;
+    }
+    return ((proj.par[P_CR0 + s] % 12) + 12) % 12;
+}
+void setChordRoot(int r)
+{
+    if (r == chordRoot()) return;
+    if (r < 0) knob_set(K_CQ, EN_CQ_EMPTY);   // (Empty: a gap)
+    else slot_key((uint32_t)((r % 12 + 12 + 7) % 12));   // (key 0 is F: slot_key's root is (5 + key) % 12)
+    acted();
+}
+void padLead(int d, bool down)
+{
+    if (d < 0 || d >= 16) return;
+    en_lead_key(d, down ? 1 : 0);
+    acted();
+}
+void padFx(int e, bool down)
+{
+    if (e < 0 || e >= EN_NFX) return;
+    ui.fx = down ? ui.fx | 1u << e : ui.fx & ~(1u << e);
+    en_fx(ui.fx | ui.bfx);
+    acted();
+}
+static const char* const MOVE_NAME[kNumMoves] = {"Rise", "Close", "Transpose", "Sweep", "Open", "Shut", "Drop", "Echo"};
+void padMove(int m, bool down)
+{
+    if (m < 0 || m >= kNumMoves) return;
+    if (m < 3)
+    {
+        const uint8_t b = (uint8_t)(1u << m);   // (EN_MV_RISE, _CLOSE, _TRANSPOSE)
+        ui.mv = (uint8_t)(down ? ui.mv | b : ui.mv & ~b);
+        en_move(ui.mv);
+    }
+    else
+    {
+        const uint32_t b = 1u << (m - 3);       // (EN_PF_SWEEP .. _ECHO)
+        ui.moves = down ? ui.moves | b : ui.moves & ~b;
+        en_perf(ui.moves);
+    }
+    acted();
+}
+static_assert(EN_MV_RISE == 1 && EN_MV_CLOSE == 2 && EN_MV_TRANSPOSE == 4 && EN_PF_SWEEP == 1 && EN_PF_OPEN == 2 &&
+                  EN_PF_CLOSE == 4 && EN_PF_DROP == 8 && EN_PF_ECHO == 16,
+              "padMove's bits");
+uint32_t perfMoves() { return ui.moves; }
+const char* fxName(int e) { return e >= 0 && e < EN_NFX ? EN_FX_NAME[e] : ""; }
+const char* moveName(int m) { return m >= 0 && m < kNumMoves ? MOVE_NAME[m] : ""; }
+
 // The project as a save would write it: the piece playing kept into its slot (with its patterns), then the
 // whole struct. keep() changes nothing the music reads until the next piece change, which keeps again.
 int snapshot(uint8_t* dst, int max)

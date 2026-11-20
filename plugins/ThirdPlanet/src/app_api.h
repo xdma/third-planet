@@ -81,6 +81,41 @@ int chordCode();
 void chordText(int code, char* buf);   // buf: kChordTextMax; "" for 0 or a code out of range
 const char* chordNow(char* buf);       // (tests) ui.c's own chord_now()
 
+// The MPC's own controls for what the FM-1 does with gestures (docs/superpowers/specs/2026-11-20-third-planet-
+// controls-design.md). Each calls the code in ui.c that the FM-1's gesture calls, and counts as the player acting
+// (autosave). Setters are absolute: setting what already is does nothing.
+constexpr int kNumLayers = 5;     // Drone, Sequence, Lead, Sequence 2, Atmosphere (PERFORM's mutes and solos)
+constexpr int kNumNudge = 6;      // Drone, Sequence, Lead, Sequence 2, Space, Atmosphere (ui.c NUDGE_*)
+constexpr int kNumSteps = 16;
+constexpr int kNumFx = 16;        // the effects grid, in its order (EN_FX_*)
+constexpr int kNumMoves = 8;      // Rise, Close, Transpose (the black keys'), Sweep, Open, Shut, Drop, Echo (PERFORM's)
+void setHold(bool on);            // REC tapped: en_freeze (the engine takes it at its next block; held() follows)
+void setLock(bool on);            // SEL held: lock_toggle
+bool muted(int layer);
+void setMute(int layer, bool on); // PERFORM's white keys 1-5
+bool soloed(int layer);
+void setSolo(int layer, bool on); // PERFORM's black keys 1-5
+void forget();                    // PERFORM's top key: en_lead_forget
+void nextChord();                 // EDIT held: en_next
+void newChords();                 // EDIT held on: en_prog_rewalk
+void shakeAll();                  // HOME held on: every layer shaken, and the noise
+void resetPiece();                // GLO held on: the piece back to its recipe (not saved)
+void nudgeLayer(int layer, bool shake);   // a layer's button held (a nudge), held on (a shake); layer < kNumNudge
+bool step(int st);                // the Pattern page's lane (knob Lane): its step st, as it plays
+void setStep(int st, bool on);    // a white key there (pattern_key)
+bool accent(int st);              // the lane's sequence's accent on step st
+void setAccent(int st, bool on);  // a black key held with the white one: accented, and the step on
+int chordRoot();                  // the Chords page's slot (knob Slot): its root 0..11 (C..B), -1 a gap
+void setChordRoot(int root);      // a key there (slot_key); -1: the slot a gap (its kind Empty)
+// Pads, held: a scale degree of the Lead (0..15), an effect of the grid, a move. A release of what is not held,
+// or of a degree the Lead no longer plays, does nothing.
+void padLead(int degree, bool down);
+void padFx(int fx, bool down);
+void padMove(int move, bool down);
+uint32_t perfMoves();             // PERFORM's moves held (EN_PF_*)
+const char* fxName(int fx);
+const char* moveName(int move);
+
 // The project as the FM-1 would save it (bytes, or -1 if max is too small).
 int snapshot(uint8_t* dst, int max);
 

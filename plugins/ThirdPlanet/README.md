@@ -12,8 +12,8 @@ NACHTFAHRT's own code, unchanged, for both the sound and the behaviour:
 It plays by itself from the moment it is loaded, as the FM-1 does from power-on.
 
 Status: **in development** (0.1, not released). It builds and passes the tests below. On an MPC
-Live III (MPC 3.10.1, 2026-11-20) it plays by itself when loaded, the pads reach the keys and
-buttons, all eight pages show, and it plays without clicks.
+Live III (MPC 3.10.1, 2026-11-20) it plays by itself when loaded and plays without clicks; the
+pads-and-screen controls below are being checked on the device.
 
 ## Install
 
@@ -24,19 +24,26 @@ Support.
 
 ## Playing it
 
-The plugin is the FM-1's panel made of MPC controls. Load it on a track and play pads or a keyboard into
-it.
+Pads and keyboards only play; everything that switches or acts once is on the screen. Load the plugin on
+a track and play the pads into it.
 
-Note numbers are given first. The names use middle C = C4 (note 60); the MPC may label note 60 C3,
-and then every name below shows one octave lower there.
+**Pad settings for the track** (the MPC's Pad Perform, on this track):
+- Pad Perform on, mode **Chromatic** (not Notes), root **C**, scale **Chromatic**;
+- octave set so that bank A pad 1 is **C1, note 36**;
+- **Banks: the continuous option**, not "Start on root note" (that one makes the banks overlap:
+  A 36–51, B 48–63, C 60–75).
 
-| MIDI notes | What they are on the FM-1 |
-| --- | --- |
-| 53..79 (F3..G5) | The 27 keys. White keys play the Lead in the piece's scale; black keys hold the 11 effects (Take-off, Supernova, Twitter, Repeat, Shimmer, Freeze, Octave, Return, Rise, Close, Transpose). In PERFORM, on the Pattern page and on the Chords page they do what they do there. |
-| 36..49 (C2..C#3) | The 14 buttons, held for as long as the note is held: 36 FX, 37 SEL, 38 ENV, 39 LFO, 40 EDIT, 41 GLO, 42 HOME, 43 SAVE, 44 ARP, 45 SEQ, 46 PLAY, 47 REC, 48 OCT-, 49 OCT+. Taps and holds work as on the FM-1: REC tapped = Hold, REC held = the effects grid on the white keys, SEL = PERFORM, EDIT = the Chords page or the next chord, ENV/ARP/LFO/SEQ/FX/SAVE held = a nudge, then a shake. |
-| any other note | The FM-1's MIDI in: the Lead, moved to the nearest note of the scale. |
+Then bank A is notes 36–51, B 52–67 and C 68–83, and the three banks are Third Planet's:
 
-With **Keys** set to Lead, every note plays the Lead and none act as keys or buttons.
+| Notes (from Pad base, 36) | Bank | What a pad does while held |
+| --- | --- | --- |
+| 36–51 | A, Lead | The Lead plays scale degree 1–16 of the piece. Monophonic; a new pad while one is held plays legato. |
+| 52–67 | B, Effects | The 16 effects of the FM-1's grid, in its order: Repeat, Time, Tape stop, Shimmer; Low-pass, High-pass, Sweep, Phaser; Reverb, Take-off, Freeze, Wash; Octave, Return, Twitter, Supernova. |
+| 68–75 | C, Moves | Rise, Close, Transpose (the FM-1's black-key moves), then Sweep, Open, Shut, Drop, Echo (PERFORM's moves). |
+| any other note | | The FM-1's MIDI in: the Lead, moved to the nearest note of the scale. |
+
+**Keys** (PLAY page): Pads (the default) or Lead, where every note plays the Lead. **Pad base** moves the
+three banks, for another pad layout or a controller. A pad held while Keys or Pad base changes is let go.
 
 **Knobs.** Every FM-1 knob that sets a sound is an MPC parameter. The parameters are absolute, so a
 Q-Link sets its value directly; on the FM-1 the knobs are relative and change meaning with the page. A
@@ -44,27 +51,35 @@ change goes through the same code the FM-1's knob runs. Values the FM-1 changes 
 the MPC's knobs: a new piece, Evolve's nudges, a shake, the engine moving the Filter, Wet and Energy
 macros.
 
+**Switches and one-shots.** What the FM-1 does with button gestures is on the screen:
+- switches (two-way: the screen shows the FM-1's state, a tap sets it): Hold, Lock, Play, each layer's
+  Mute and Solo, the Pattern's steps and accents;
+- one-shots (a tap acts once, and the button goes back to Off): Forget, Next chord, New chords, Shake all,
+  Reset piece, and each layer's Nudge and Shake.
+
+Each calls the same code in the FM-1's app that its gesture calls.
+
 **Status line.** Across the top of every page:
 - **Piece**: the piece playing.
 - **Chord**: the chord sounding, named as the FM-1's screen names it.
-- **Page**: the FM-1 page the keys and buttons act on now. (The MPC's knobs are absolute and do not
-  follow it.)
-- **PERFORM** (and **LOCK**) and **HOLD**, while they are on.
+- **Pad**: what the last pad or note did ("Lead 3", "Shimmer", "Rise", "Note 90").
+- **HOLD** and **LOCK**, while they are on.
 
-The buttons are pads, so this is how you see what the keys do at the moment.
-
-The screen has eight pages, laid out like the FM-1's:
+The screen has eleven pages:
 
 | Page | What is on it |
 | --- | --- |
+| PLAY | Hold, Lock, Play, Forget; Next chord, New chords, Shake all, Reset piece; Keys, Pad base, Sync |
+| LAYERS | A column each for Drone, Seq, Lead, Seq 2 and Atmos: Mute, Solo, Nudge, Shake. Space: Nudge, Shake |
 | MAIN | Filter, Evolve, Motion, Drift; Energy, Wet, Sweep, Volume; the four layer levels; Piece, Tempo, Root, Mode |
 | DRONE | Pedal, Reso, Phaser, Attack; Colour, Release, Reverb, Echo; Width, Time, Rate, Intro; its voice |
 | SEQ | Density, Octave, Length, Grid; Cutoff, Decay, Reverb, Echo; Repeat A/B and their times; its voice, Time, Rate, Intro |
 | LEAD | Phrases, Octave, Glide, Vibrato; Tone, Attack, Reverb, Echo; Width, Time, Rate, Intro; its voice |
-| SEQ 2 | Chance, Octave, Length, voice; Cutoff, Decay, Reverb, Echo; the Pattern page (Lane, Accent, Lane chance, Pattern); Width, Time, Rate, Intro |
+| SEQ 2 | Chance, Octave, Length, voice; Cutoff, Decay, Reverb, Echo; Width, Time, Rate, Intro |
+| PATTERN | Lane, Accent, Lane chance, Pattern; the lane's 16 steps; their 16 accents (an accent turns its step on) |
 | ATMOS | Density, Spread, Drift, Air; Colour, Ring, Reverb, Echo; Width, Time, Rate, Intro; its type and level |
-| SPACE | Echo, Echo time, Feedback, Reverb; Blur, Tone, Width, Plate size; Lead in, Bridge, Arc, Memory; Transpose, Tune, Sync, Keys |
-| CHORDS | Chord slot, kind, type, Play (Endless or Loop), Walk |
+| SPACE | Echo, Echo time, Feedback, Reverb; Blur, Tone, Width, Plate size; Lead in, Bridge, Arc, Memory; Transpose, Tune |
+| CHORDS | Chord slot, Chord root ("-" is a gap), kind, type; Play (Endless or Loop), Walk |
 
 The FM-1's centre notch and knob acceleration are left out, because the MPC's knobs are absolute.
 
@@ -74,15 +89,16 @@ starts the piece from the top, and Stop rests it.
 
 **Saving.** The MPC project keeps the FM-1's own save, every piece as it was left, together with the
 knob values. When a project loads, the FM-1 starts as from power-on with that save, and then the knob
-values are applied.
+values are applied. The switches the FM-1 never saves (Hold, Lock, Play, the mutes and solos) come back
+from the MPC project too; one-shots never act from a load.
 
 **One at a time.** The engine exists once per MPC. A second Third Planet stays silent, and its
 status line says so, until the first is removed; then it takes over with its own settings.
 
 **Not on the MPC:** the FM-1's screen (its pictures and help cards; the status line shows the main
-facts instead), MIDI out (the MPC discards plugin
-MIDI out), the button lights, and the FM-1's own save gesture (GLO held). The MPC project saves
-instead.
+facts instead), its pages and PERFORM as modes, the panel's gesture timing (taps and holds), MIDI out
+(the MPC discards plugin MIDI out), the button lights, and the FM-1's own save gesture (GLO held). The
+MPC project saves instead.
 
 ## How it is built
 
@@ -95,12 +111,13 @@ instead.
   then runs the UI.
 - `src/power.{h,cpp}`: the power switch. Every NACHTFAHRT variable goes back to its power-on value on
   every boot.
-- `src/ThirdPlanet.cpp`, `src/params.h`: the MPC side (notes to keys and buttons, parameters, Sync,
-  saving, the status line). The status line is four read-only parameters after the 109 controls (Page,
-  Chord, Perform, Hold), sent to the MPC when they change.
+- `src/ThirdPlanet.cpp`, `src/params.h`: the MPC side (the pad banks, parameters, switches and
+  one-shots, Sync, saving, the status line). The status line is four read-only parameters after the 173
+  controls (Pad, Chord, Hold, Lock), sent to the MPC when they change.
 - `skins/`: the screen. `tools/gen_skin.py` makes it from `ui.json` with the SDK's generator, then adds
-  the status line and moves the grid down. With `skins/` present the build copies it as it is, so rerun
-  the script after changing `ui.json` or the parameters.
+  the status line, moves the grid down, adds the PATTERN page's steps and accents and builds the LAYERS
+  page. With `skins/` present the build copies it as it is, so rerun the script after changing `ui.json`
+  or the parameters. On the MPC a label over a button takes its touches, so captions sit beside buttons.
 - [docs/ui-behavior-map.md](docs/ui-behavior-map.md): what every FM-1 control does, traced from the code.
 
 ## Tests
@@ -111,8 +128,10 @@ From the repository root:
 | --- | --- |
 | `plugins/ThirdPlanet/tests/null_test.sh` | The engine as built here (C++) against upstream's build (C99, `-ffp-contract=off`). All ten pieces must match bit for bit. |
 | `plugins/ThirdPlanet/tests/app_null.sh` | The app and the engine against upstream's own host simulator (`host/amb_host.c`, unpatched sources), on scripted play (keys, effects, pieces, knobs, PERFORM, Hold, Evolve). Every WAV must match byte for byte. |
-| `c++ -std=c++17 -O2 -I plugins/ThirdPlanet/src -I deps/mpc-plugin-sdk/framework plugins/ThirdPlanet/tests/test_plugin.cpp plugins/ThirdPlanet/src/app_unit.cpp plugins/ThirdPlanet/src/engine_unit.cpp plugins/ThirdPlanet/src/power.cpp -o plugins/ThirdPlanet/build/tests/test_plugin && plugins/ThirdPlanet/build/tests/test_plugin` | The plugin glue. A reboot must be a power-on. Output must equal the app's own at any block size. Then notes, parameters both ways, a save and a load, and a second instance. |
-| `tests/test_display.cpp` (built like `test_plugin`) | The status line. The chord's name must equal the FM-1 screen's own (`chord_now`) on every piece, walk and Loop setting. Page, PERFORM and Hold must follow taps on the button notes. A value the MPC writes over must be corrected, and a second instance must show only its message. |
+| `c++ -std=c++17 -O2 -I plugins/ThirdPlanet/src -I deps/mpc-plugin-sdk/framework plugins/ThirdPlanet/tests/test_plugin.cpp plugins/ThirdPlanet/src/app_unit.cpp plugins/ThirdPlanet/src/engine_unit.cpp plugins/ThirdPlanet/src/power.cpp -o plugins/ThirdPlanet/build/tests/test_plugin && plugins/ThirdPlanet/build/tests/test_plugin` | The plugin glue. A reboot must be a power-on. Output must equal the app's own at any block size, with and without pads played. Then parameters both ways, a save and a load, and a second instance. |
+| `tests/test_controls.cpp` (built like `test_plugin`) | The controls: every pad bank against the engine state it sets, releases across a change of Keys or Pad base, all notes off, notes outside the banks; every switch both ways; every one-shot acts once a press and goes back to Off; steps, accents and the chord root; a project load that fires no one-shot. |
+| `tests/test_equiv.cpp` (built like `test_plugin`) | Every MPC control against the FM-1 gesture it stands for, on two bit-exact boots: PERFORM's mute, solo and move keys, REC held with a key, the black keys, HOME and GLO held on, the nudge and shake holds, the Pattern and Chords pages' keys. Audio and saved project must be identical. |
+| `tests/test_display.cpp` (built like `test_plugin`) | The status line. The chord's name must equal the FM-1 screen's own (`chord_now`) on every piece, walk and Loop setting. Pad, Hold and Lock must follow the pads and the switches. A value the MPC writes over must be corrected, and a second instance must show only its message. |
 | `tests/test_sync.cpp` (built like `test_plugin`) | Sync, through the plugin's VST entry point and a fake host clock: rest, start, the tempo followed at 120 and 90 BPM, stop, and Sync off while playing and while resting. |
 | `tests/test_fuzz.cpp` (built like `test_plugin`, with `-fsanitize=address,undefined -fno-sanitize=shift-base`) | Random notes, all-notes-off, parameters, saves and loads, at random block sizes. The output must stay finite and bounded. Upstream's `wd_read` reads one sample past its buffer (T-1723); run it with `-fsanitize-recover=address ASAN_OPTIONS=halt_on_error=0` until that is decided. |
 | `deps/mpc-plugin-sdk/.sdk-tools/host_sim plugins/ThirdPlanet/build/native/third-planet.dylib test` | The SDK's MPC host checks. Two warnings are expected: the instrument plays on after all-notes-off, and the saved project changes as it plays. |

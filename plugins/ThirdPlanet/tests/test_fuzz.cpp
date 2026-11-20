@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// A random-input probe of the whole plugin: random notes over the full range (keys, buttons, MIDI in), held and
+// A random-input probe of the whole plugin: random notes over the full range (the pad banks, MIDI in), held and
 // released at random, all-notes-off, random parameter values, saves and loads mid-stream, random block sizes.
 // The output must stay finite and bounded, and nothing may crash (run under ASan and UBSan).
 //   TP_FUZZ_SECONDS=N (default 120) of audio per seed; seeds 1..TP_FUZZ_SEEDS (default 3).

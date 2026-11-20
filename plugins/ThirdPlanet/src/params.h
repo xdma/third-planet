@@ -27,8 +27,20 @@ enum class Kind
     Piece,     // the piece (PRESET)
     Walk,      // the Chords page's walk character (ALGO there)
     Sync,      // Third Planet's own: follow the MPC's tempo and transport (MIDI clock to the FM-1)
-    KeyMode,   // Third Planet's own: how MIDI notes reach the FM-1
+    KeyMode,   // Third Planet's own: what MIDI notes play (Pads: the three pad banks; Lead: the Lead)
+    PadBase,   // Third Planet's own: the pad banks' first note
+    Switch,    // a two-way switch for an FM-1 state (code: Sw*): tp::app's setter and its readout
+    Action,    // a one-shot (code: Act*): acts once on a change to On, then goes back to Off
+    Step,      // the Pattern lane's step (code: 0..15)
+    Accent,    // the Pattern lane's accent (code: 0..15)
+    ChordRoot, // the Chords slot's root: a gap or C..B
 };
+
+// Switch codes: Hold, Lock, Play, then the five layers' mutes and solos.
+enum SwitchCode { kSwHold, kSwLock, kSwPlay, kSwMute0, kSwSolo0 = kSwMute0 + tp::app::kNumLayers };
+// Action codes: the five, then each layer's nudge and shake (Drone, Seq, Lead, Seq 2, Space, Atmos).
+enum ActionCode { kActForget, kActNext, kActNewChords, kActShakeAll, kActReset, kActNudge0,
+                  kActShake0 = kActNudge0 + tp::app::kNumNudge };
 
 struct ParamDef
 {
@@ -62,6 +74,7 @@ constexpr ParamDef kParams[] = {
     {"piece", "Piece", Kind::Piece, 0},
     {"sync", "Sync", Kind::Sync, 0},
     {"keymode", "Keys", Kind::KeyMode, 0},
+    {"pad_base", "Pad base", Kind::PadBase, 0},
     {"lvl_atmos", "Atmosphere", Kind::Knob, P_CRACKLE},
     {"tune", nullptr, Kind::Knob, P_TUNE},
     // Drone (ENV)
@@ -160,6 +173,54 @@ constexpr ParamDef kParams[] = {
     {"chord_slot", "Chord slot", Kind::Knob, kKnobSlot},
     {"chord_kind", "Chord kind", Kind::Knob, kKnobChord},
     {"chord_type", "Chord type", Kind::Knob, kKnobType},
+    {"chord_root", "Chord root", Kind::ChordRoot, 0},
+    // PLAY: the FM-1's gestures as switches and one-shots
+    {"hold", "Hold", Kind::Switch, kSwHold},
+    {"lock", "Lock", Kind::Switch, kSwLock},
+    {"play", "Play", Kind::Switch, kSwPlay},
+    {"forget", "Forget", Kind::Action, kActForget},
+    {"next_chord", "Next chord", Kind::Action, kActNext},
+    {"new_chords", "New chords", Kind::Action, kActNewChords},
+    {"shake_all", "Shake all", Kind::Action, kActShakeAll},
+    {"reset_piece", "Reset piece", Kind::Action, kActReset},
+    // LAYERS
+    {"mute_drone", "Mute Drone", Kind::Switch, kSwMute0 + 0},
+    {"mute_seq", "Mute Seq", Kind::Switch, kSwMute0 + 1},
+    {"mute_lead", "Mute Lead", Kind::Switch, kSwMute0 + 2},
+    {"mute_seq2", "Mute Seq 2", Kind::Switch, kSwMute0 + 3},
+    {"mute_atmos", "Mute Atmos", Kind::Switch, kSwMute0 + 4},
+    {"solo_drone", "Solo Drone", Kind::Switch, kSwSolo0 + 0},
+    {"solo_seq", "Solo Seq", Kind::Switch, kSwSolo0 + 1},
+    {"solo_lead", "Solo Lead", Kind::Switch, kSwSolo0 + 2},
+    {"solo_seq2", "Solo Seq 2", Kind::Switch, kSwSolo0 + 3},
+    {"solo_atmos", "Solo Atmos", Kind::Switch, kSwSolo0 + 4},
+    {"nudge_drone", "Nudge Drone", Kind::Action, kActNudge0 + 0},
+    {"nudge_seq", "Nudge Seq", Kind::Action, kActNudge0 + 1},
+    {"nudge_lead", "Nudge Lead", Kind::Action, kActNudge0 + 2},
+    {"nudge_seq2", "Nudge Seq 2", Kind::Action, kActNudge0 + 3},
+    {"nudge_space", "Nudge Space", Kind::Action, kActNudge0 + 4},
+    {"nudge_atmos", "Nudge Atmos", Kind::Action, kActNudge0 + 5},
+    {"shake_drone", "Shake Drone", Kind::Action, kActShake0 + 0},
+    {"shake_seq", "Shake Seq", Kind::Action, kActShake0 + 1},
+    {"shake_lead", "Shake Lead", Kind::Action, kActShake0 + 2},
+    {"shake_seq2", "Shake Seq 2", Kind::Action, kActShake0 + 3},
+    {"shake_space", "Shake Space", Kind::Action, kActShake0 + 4},
+    {"shake_atmos", "Shake Atmos", Kind::Action, kActShake0 + 5},
+    // PATTERN: the lane's steps and accents
+    {"step1", "Step 1", Kind::Step, 0}, {"step2", "Step 2", Kind::Step, 1}, {"step3", "Step 3", Kind::Step, 2},
+    {"step4", "Step 4", Kind::Step, 3}, {"step5", "Step 5", Kind::Step, 4}, {"step6", "Step 6", Kind::Step, 5},
+    {"step7", "Step 7", Kind::Step, 6}, {"step8", "Step 8", Kind::Step, 7}, {"step9", "Step 9", Kind::Step, 8},
+    {"step10", "Step 10", Kind::Step, 9}, {"step11", "Step 11", Kind::Step, 10}, {"step12", "Step 12", Kind::Step, 11},
+    {"step13", "Step 13", Kind::Step, 12}, {"step14", "Step 14", Kind::Step, 13}, {"step15", "Step 15", Kind::Step, 14},
+    {"step16", "Step 16", Kind::Step, 15},
+    {"accent1", "Accent 1", Kind::Accent, 0}, {"accent2", "Accent 2", Kind::Accent, 1},
+    {"accent3", "Accent 3", Kind::Accent, 2}, {"accent4", "Accent 4", Kind::Accent, 3},
+    {"accent5", "Accent 5", Kind::Accent, 4}, {"accent6", "Accent 6", Kind::Accent, 5},
+    {"accent7", "Accent 7", Kind::Accent, 6}, {"accent8", "Accent 8", Kind::Accent, 7},
+    {"accent9", "Accent 9", Kind::Accent, 8}, {"accent10", "Accent 10", Kind::Accent, 9},
+    {"accent11", "Accent 11", Kind::Accent, 10}, {"accent12", "Accent 12", Kind::Accent, 11},
+    {"accent13", "Accent 13", Kind::Accent, 12}, {"accent14", "Accent 14", Kind::Accent, 13},
+    {"accent15", "Accent 15", Kind::Accent, 14}, {"accent16", "Accent 16", Kind::Accent, 15},
 };
 
 constexpr int kNumControls = (int)(sizeof(kParams) / sizeof(kParams[0]));

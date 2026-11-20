@@ -4,15 +4,18 @@
 // A port of NACHTFAHRT by Cranky Man (https://github.com/FartyPants/fm1-nachtfahrt), the generative
 // 1970s Berlin School firmware for the M-VAVE FM-1. Both the sound engine and the FM-1's whole app
 // (its pages, buttons, keys, PERFORM, pieces, Evolve) are NACHTFAHRT's own code, unchanged
-// (src/nachtfahrt/, docs/VENDOR.md). This file is the FM-1's panel, made of MPC controls:
+// (src/nachtfahrt/, docs/VENDOR.md). This file gives the FM-1 the MPC's controls: pads and keys only play,
+// the screen switches and acts (docs/superpowers/specs/2026-11-20-third-planet-controls-design.md):
 //
-//   MIDI notes F3..G5 (53..79)   the FM-1's 27 keys: white keys play the Lead in the scale, black keys
-//                                hold the effects; on PERFORM, Pattern and Chords they do what they do there
-//   MIDI notes C2..C#3 (36..49)  the FM-1's 14 buttons, held while the note is held:
-//                                FX SEL ENV LFO EDIT GLO HOME SAVE ARP SEQ PLAY REC OCT- OCT+
-//   other MIDI notes             the FM-1's MIDI in: the Lead, to the nearest note of the scale
-//   parameters                   every FM-1 knob, absolute (src/params.h)
-//   Sync                         the MPC's tempo and transport, sent to the FM-1 as MIDI clock
+//   Keys: Pads, notes from Pad base   +0..15 the Lead's scale degrees 1..16, +16..31 the 16 effects of the
+//                                     FM-1's grid, +32..39 the moves (Rise, Close, Transpose, Sweep, Open,
+//                                     Shut, Drop, Echo), each while held
+//   other notes, or Keys: Lead        the FM-1's MIDI in: the Lead, to the nearest note of the scale
+//   parameters                        every FM-1 knob, absolute; Hold, Lock, Play, the mutes and solos, the
+//                                     Pattern's steps and accents, the Chords slot's root as switches; Forget,
+//                                     Next chord, New chords, Shake all, Reset, the nudges and shakes as
+//                                     one-shots (src/params.h)
+//   Sync                              the MPC's tempo and transport, sent to the FM-1 as MIDI clock
 //
 // Signal flow: the panel -> the FM-1 app (ui.c) -> engine commands -> en_render (Drone, Sequence,
 // Sequence 2, Lead, Atmosphere, echo, plate) in 256-frame blocks -> stereo out. Time inside is the
@@ -37,26 +40,39 @@
 
 namespace {
 
-constexpr int kKeyNote0 = 53;      // F3: the FM-1's key 0
-constexpr int kButtonNote0 = 36;   // C2: the FM-1's first button (FX)
+// The pad banks, from Pad base: the Lead's degrees, the effects, the moves.
+constexpr int kPadLeadN = 16, kPadFxN = tp::app::kNumFx, kPadMoveN = tp::app::kNumMoves;
+constexpr int kPadSpan = kPadLeadN + kPadFxN + kPadMoveN;
 constexpr int kMaxSends = 24;      // parameters sent back to the MPC per block (Kolo's device finding)
 constexpr int kSettleChunks = 64;  // ~0.37 s after a boot, every value has been sent back to the MPC
 
 // Display parameters: what the screen's status line shows, appended after the controls. Outputs only:
 // not automatable, never read by the sound. A blank value is " " (an empty string shows the number).
-constexpr int kDispPage = tp::kNumControls;   // the FM-1's page; one more value: another instance plays
-constexpr int kDispChord = kDispPage + 1;     // the chord sounding (tp::app::chordCode)
-constexpr int kDispPerform = kDispPage + 2;   // PERFORM and its Lock
-constexpr int kDispHold = kDispPage + 3;      // REC's Hold
+constexpr int kDispPad = tp::kNumControls;   // what the last pad or note did (kPad*), or that another instance plays
+constexpr int kDispChord = kDispPad + 1;     // the chord sounding (tp::app::chordCode)
+constexpr int kDispHold = kDispPad + 2;      // Hold
+constexpr int kDispLock = kDispPad + 3;      // Lock
 constexpr int kNumDisplay = 4;
-static_assert(kDispPerform == kDispChord + 1 && kDispHold == kDispPage + kNumDisplay - 1, "status() fills them in this order");
-const char* const kPerformText[] = {" ", "PERFORM", "PERFORM  LOCK", "LOCK"};
+static_assert(kDispChord == kDispPad + 1 && kDispHold == kDispPad + 2 && kDispLock == kDispPad + kNumDisplay - 1,
+              "status() fills them in this order");
+// The Pad field's values: 0 nothing yet; a note n (Lead mode, or outside the banks) n + 1; then the banks.
+constexpr int kPadBusy = 129, kPadLead0 = 130, kPadFx0 = kPadLead0 + kPadLeadN, kPadMove0 = kPadFx0 + kPadFxN,
+              kPadCodes = kPadMove0 + kPadMoveN;
 const char* const kHoldText[] = {" ", "HOLD"};
+const char* const kLockText[] = {" ", "LOCK"};
 const char* const kBusyText = "Another Third Planet plays";
 constexpr int kFixFrames = 4410;   // a status value the MPC wrote over is corrected at most every 100 ms
+constexpr uint32_t kSwitchSettle = 2;   // chunks a switch keeps the MPC's value after a write (Hold, Play: a block late)
 
-const char* const kKeyModes[] = {"Panel", "Lead"};
+const char* const kKeyModes[] = {"Pads", "Lead"};
 const char* const kOffOn[] = {"Off", "On"};
+const char* const kNoteName[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+
+bool isBool(tp::Kind k)
+{
+    return k == tp::Kind::Sync || k == tp::Kind::Switch || k == tp::Kind::Action || k == tp::Kind::Step ||
+           k == tp::Kind::Accent;
+}
 
 // A value as the FM-1's screen shows it.
 void label(const tp::ParamDef& d, int v, char* buf, size_t n)
@@ -69,6 +85,12 @@ void label(const tp::ParamDef& d, int v, char* buf, size_t n)
         case tp::Kind::Walk: std::snprintf(buf, n, "%s", EN_WALK_NAME[v % EN_NWALK]); return;
         case tp::Kind::Sync: std::snprintf(buf, n, "%s", kOffOn[v ? 1 : 0]); return;
         case tp::Kind::KeyMode: std::snprintf(buf, n, "%s", kKeyModes[v ? 1 : 0]); return;
+        case tp::Kind::PadBase: std::snprintf(buf, n, "%d", v); return;
+        case tp::Kind::Switch:
+        case tp::Kind::Action:
+        case tp::Kind::Step:
+        case tp::Kind::Accent: std::snprintf(buf, n, "%s", kOffOn[v ? 1 : 0]); return;
+        case tp::Kind::ChordRoot: std::snprintf(buf, n, "%s", v >= 0 && v < 12 ? kNoteName[v] : "-"); return;
         case tp::Kind::Voice: break;
         case tp::Kind::Knob: break;
     }
@@ -101,6 +123,7 @@ void label(const tp::ParamDef& d, int v, char* buf, size_t n)
 int rangeLo(const tp::ParamDef& d)
 {
     using namespace tp::app;
+    if (d.kind == tp::Kind::ChordRoot) return -1;
     if (d.kind != tp::Kind::Knob && d.kind != tp::Kind::Voice) return 0;
     if (d.code < P_NPARAMS) return en_param_info(d.code)->lo;
     return d.code >= kKnobFilter && d.code <= kKnobSpace ? -50 : 0;
@@ -116,6 +139,12 @@ int rangeHi(const tp::ParamDef& d)
         case tp::Kind::Walk: return EN_NWALK - 1;
         case tp::Kind::Sync: return 1;
         case tp::Kind::KeyMode: return 1;
+        case tp::Kind::PadBase: return 128 - kPadSpan;
+        case tp::Kind::ChordRoot: return 11;
+        case tp::Kind::Switch:
+        case tp::Kind::Action:
+        case tp::Kind::Step:
+        case tp::Kind::Accent: return 1;
         case tp::Kind::Voice:
         case tp::Kind::Knob: break;
     }
@@ -137,6 +166,7 @@ int rangeHi(const tp::ParamDef& d)
 int rangeDef(const tp::ParamDef& d)
 {
     if (d.kind == tp::Kind::Master) return 100;
+    if (d.kind == tp::Kind::PadBase) return 36;   // (C1: the MPC's bank A pad 1, Pad Perform chromatic from C1)
     if ((d.kind == tp::Kind::Knob || d.kind == tp::Kind::Voice) && d.code < P_NPARAMS) return en_param_info(d.code)->def;
     return 0;
 }
@@ -146,7 +176,14 @@ mpc::Param makeParam(const tp::ParamDef& d)
 {
     const char* name = d.name ? d.name : en_param_info(d.code)->name;
     const int lo = rangeLo(d), hi = rangeHi(d), def = rangeDef(d);
-    if (d.kind == tp::Kind::Sync) return mpc::boolParam(d.id, name, false);
+    if (isBool(d.kind))
+    {
+        mpc::Param p = mpc::boolParam(d.id, name, false);
+        // (one-shots, and what belongs to the lane or slot on show, would replay wrongly as automation)
+        p.automatable = d.kind == tp::Kind::Sync || d.kind == tp::Kind::Switch;
+        return p;
+    }
+    if (d.kind == tp::Kind::PadBase) return mpc::intParam(d.id, name, lo, hi, def, "");
     if (hi - lo < 25 && d.kind != tp::Kind::Master)
     {
         std::vector<std::string> names;
@@ -157,6 +194,7 @@ mpc::Param makeParam(const tp::ParamDef& d)
             names.emplace_back(buf);
         }
         mpc::Param p = mpc::choiceParam(d.id, name, names, def - lo);
+        p.automatable = d.kind != tp::Kind::ChordRoot;
         return p;
     }
     return mpc::intParam(d.id, name, lo, hi, def, "");
@@ -175,16 +213,15 @@ public:
             lo_[i] = rangeLo(tp::kParams[i]);
             if (tp::kParams[i].kind == tp::Kind::Sync) idxSync_ = i;
             if (tp::kParams[i].kind == tp::Kind::KeyMode) idxKeyMode_ = i;
+            if (tp::kParams[i].kind == tp::Kind::PadBase) idxPadBase_ = i;
             appVal_[i].store(INT_MIN, std::memory_order_relaxed);
             dirty_[i].store(false, std::memory_order_relaxed);
         }
-        std::vector<std::string> pages{" "};
-        for (int v = 0; v < tp::app::numViews(); ++v) pages.emplace_back(tp::app::viewName(v));
-        pages.emplace_back(kBusyText);
-        addDisplay(mpc::choiceParam("d_page", "Page", pages, 0));
+        addDisplay(mpc::intParam("d_pad", "Pad", 0, kPadCodes - 1, 0, ""));
         addDisplay(mpc::intParam("d_chord", "Chord", 0, tp::app::kChordCodes - 1, 0, ""));
-        addDisplay(mpc::choiceParam("d_perform", "Perform", std::vector<std::string>(kPerformText, kPerformText + 4), 0));
-        addDisplay(mpc::choiceParam("d_hold", "Hold", std::vector<std::string>(kHoldText, kHoldText + 2), 0));
+        addDisplay(mpc::choiceParam("d_hold", "Hold status", std::vector<std::string>(kHoldText, kHoldText + 2), 0));
+        addDisplay(mpc::choiceParam("d_lock", "Lock status", std::vector<std::string>(kLockText, kLockText + 2), 0));
+        forgetHeld();
         displayReset_.store(true, std::memory_order_relaxed);
     }
 
@@ -200,9 +237,9 @@ public:
     // thread before the next block, in parameter order. A value the app itself just sent is not sent back.
     void parameterChanged(int index, float plainValue) override
     {
-        if (index >= kDispPage && index < kDispPage + kNumDisplay)
+        if (index >= kDispPad && index < kDispPad + kNumDisplay)
         {   // (the MPC wrote a status value itself, a load or automation: the true one goes out again)
-            if ((int)std::lround(plainValue) != displaySent_[index - kDispPage].load(std::memory_order_acquire))
+            if ((int)std::lround(plainValue) != displaySent_[index - kDispPad].load(std::memory_order_acquire))
                 displayFix_.store(true, std::memory_order_release);
             return;
         }
@@ -215,6 +252,11 @@ public:
 
     bool formatValue(int index, float plainValue, std::string& out) override
     {
+        if (index == kDispPad)
+        {
+            out = padText(std::isfinite(plainValue) ? (int)std::lround(plainValue) : 0);
+            return true;
+        }
         if (index == kDispChord)
         {
             char t[tp::app::kChordTextMax];
@@ -273,7 +315,8 @@ public:
         bool fresh = false;
         if (!lease_.claim(this, fresh))   // another instance owns the engine: silence, and the screen says so
         {
-            const int busy[kNumDisplay] = {tp::app::numViews() + 1, 0, 0, 0};
+            forgetHeld();   // (what this instance held went with the engine; the owner boots its own)
+            const int busy[kNumDisplay] = {kPadBusy, 0, 0, 0};
             sendDisplay(busy, kMaxSends, ctx.numFrames);
             return;
         }
@@ -317,26 +360,32 @@ private:
         tp::app::boot();
         pos_ = tp::kChunk;
         chunks_ = 0;
-        keys_ = buttons_ = 0;
-        std::memset(noteCount_, 0, sizeof noteCount_);
+        forgetHeld();   // (power_on let go of everything)
         clockRunning_ = false;
         lastTick_ = LLONG_MIN;
         displayReset_.store(true, std::memory_order_relaxed);
         // The FM-1's project is the truth for everything it saves: values the MPC loaded alongside it are
         // dropped (as shown, they may carry Motion's octave shift, or a walk slot as if written). What the
         // FM-1 never saves comes back from the MPC once it holds this instance's values (a project
-        // loaded, or values sent back earlier): the three macros, the Pattern lane, the chord slot.
+        // loaded, or values sent back earlier): the three macros, the Pattern lane, the chord slot, and the
+        // switches (Hold, Lock, Play, the mutes and solos).
         const bool restore = hostKnows_.load(std::memory_order_acquire);
         for (int i = 0; i < tp::kNumControls; ++i)
         {
             appVal_[i].store(INT_MIN, std::memory_order_relaxed);
+            settle_[i] = 0;
             const tp::ParamDef& d = tp::kParams[i];
-            if (d.kind != tp::Kind::Knob && d.kind != tp::Kind::Voice && d.kind != tp::Kind::Piece && d.kind != tp::Kind::Walk)
-                continue;   // (Volume, Sync, Keys: the plugin's own, kept as they are)
-            const bool unsaved = d.kind == tp::Kind::Knob &&
-                                 (d.code == tp::app::kKnobFilter || d.code == tp::app::kKnobWet ||
-                                  d.code == tp::app::kKnobEnergy || d.code == tp::app::kKnobLane ||
-                                  d.code == tp::app::kKnobSlot);
+            if (d.kind == tp::Kind::Master || d.kind == tp::Kind::Sync || d.kind == tp::Kind::KeyMode ||
+                d.kind == tp::Kind::PadBase)
+                continue;   // (Volume, Sync, Keys, Pad base: the plugin's own, kept as they are)
+            // (the steps, accents and the root are the app's, saved in its project; the one-shots go back to Off and
+            // never fire from a load: mirror() sends every one of them from the app. The switches are the FM-1's
+            // state it never saves, so they come back from the MPC with the macros)
+            const bool unsaved = d.kind == tp::Kind::Switch ||
+                                 (d.kind == tp::Kind::Knob &&
+                                  (d.code == tp::app::kKnobFilter || d.code == tp::app::kKnobWet ||
+                                   d.code == tp::app::kKnobEnergy || d.code == tp::app::kKnobLane ||
+                                   d.code == tp::app::kKnobSlot));
             if (restore && unsaved)
             {
                 wanted_[i].store((int)std::lround(get(i)) + (isChoice(i) ? lo_[i] : 0), std::memory_order_relaxed);
@@ -370,46 +419,137 @@ private:
                     }
                     syncWas_ = v != 0;
                     break;
-                case Kind::Master:
-                case Kind::KeyMode: break;   // read where used
+                case Kind::KeyMode:
+                case Kind::PadBase: releaseHeld(); break;   // (read where used; a pad held now meant something else)
+                case Kind::Switch:
+                    setSwitch(d.code, v != 0);
+                    settle(i, v);
+                    break;
+                case Kind::Action:
+                    appVal_[i].store(0, std::memory_order_release);   // (before the write: it comes back here)
+                    setNormalised(i, 0.0f);
+                    notifyHostParameterChanged(i);
+                    if (v) act(d.code);
+                    break;
+                case Kind::Step: app::setStep(d.code, v != 0); settle(i, v); break;
+                case Kind::Accent: app::setAccent(d.code, v != 0); settle(i, v); break;
+                case Kind::ChordRoot: app::setChordRoot(v); settle(i, v); break;
+                case Kind::Master: break;   // read where used
             }
         }
     }
 
-    // MIDI notes: the FM-1's keys, its buttons, or its MIDI in.
+    // A switch set from the MPC: the app's own setter (absolute).
+    static void setSwitch(int code, bool on)
+    {
+        using namespace tp;
+        if (code == kSwHold) app::setHold(on);
+        else if (code == kSwLock) app::setLock(on);
+        else if (code == kSwPlay) app::play(on);
+        else if (code >= kSwMute0 && code < kSwMute0 + app::kNumLayers) app::setMute(code - kSwMute0, on);
+        else if (code >= kSwSolo0 && code < kSwSolo0 + app::kNumLayers) app::setSolo(code - kSwSolo0, on);
+    }
+    static bool switchValue(int code)
+    {
+        using namespace tp;
+        if (code == kSwHold) return app::held();
+        if (code == kSwLock) return app::locked();
+        if (code == kSwPlay) return app::playing();
+        if (code >= kSwMute0 && code < kSwMute0 + app::kNumLayers) return app::muted(code - kSwMute0);
+        if (code >= kSwSolo0 && code < kSwSolo0 + app::kNumLayers) return app::soloed(code - kSwSolo0);
+        return false;
+    }
+    // A one-shot pressed.
+    static void act(int code)
+    {
+        using namespace tp;
+        switch (code)
+        {
+            case kActForget: app::forget(); return;
+            case kActNext: app::nextChord(); return;
+            case kActNewChords: app::newChords(); return;
+            case kActShakeAll: app::shakeAll(); return;
+            case kActReset: app::resetPiece(); return;
+            default:
+                if (code >= kActNudge0 && code < kActNudge0 + app::kNumNudge) app::nudgeLayer(code - kActNudge0, false);
+                else if (code >= kActShake0 && code < kActShake0 + app::kNumNudge) app::nudgeLayer(code - kActShake0, true);
+                return;
+        }
+    }
+    // The MPC's value stays as written for a few blocks, while the app takes it (Hold, Play: a block late).
+    void settle(int i, int v)
+    {
+        appVal_[i].store(v, std::memory_order_release);
+        settle_[i] = chunks_ + kSwitchSettle;
+    }
+
+    // MIDI notes: the pads' banks (Keys: Pads), or the FM-1's MIDI in. What a note does is fixed when it goes down
+    // (padAct_), so its release ends that, whatever Keys or Pad base say by then.
+    enum : int8_t { kNoAct = -2, kLeadMidi = -1 };   // padAct_: nothing held, the Lead by MIDI, else a bank's pad
     void midiIn(const mpc::ProcessContext& ctx)
     {
-        const bool leadOnly = getInt(idxKeyMode_) != 0;
+        const bool pads = getInt(idxKeyMode_) == 0;
+        const int base = getInt(idxPadBase_);
         for (int i = 0; i < ctx.numMidiEvents; ++i)
         {
             const mpc::MidiEvent& e = ctx.midi[i];
-            if (e.isAllNotesOff()) { allOff(); continue; }
+            if (e.isAllNotesOff()) { releaseHeld(); continue; }
             if (!e.isNoteOn() && !e.isNoteOff()) continue;
             const int n = e.note() & 127;
-            const bool on = e.isNoteOn();
-            if (on) { if (noteCount_[n] < 255) noteCount_[n]++; }
-            else if (noteCount_[n] > 0) noteCount_[n]--;
-            const bool down = noteCount_[n] > 0;
-            if (!leadOnly && n >= kKeyNote0 && n < kKeyNote0 + tp::app::kNumKeys)
-                keys_ = down ? keys_ | 1u << (n - kKeyNote0) : keys_ & ~(1u << (n - kKeyNote0));
-            else if (!leadOnly && n >= kButtonNote0 && n < kButtonNote0 + tp::app::kNumButtons)
-                buttons_ = down ? buttons_ | 1u << (n - kButtonNote0) : buttons_ & ~(1u << (n - kButtonNote0));
-            else
-                tp::app::midiIn(on ? 0x09u | 0x90u << 8 | (uint32_t)n << 16 | (uint32_t)e.velocity() << 24
-                                   : 0x08u | 0x80u << 8 | (uint32_t)n << 16);
+            if (e.isNoteOn())
+            {
+                if (noteCount_[n] < 255 && noteCount_[n]++ > 0) continue;   // (already down: the first press acts)
+                const int k = n - base;
+                padAct_[n] = pads && k >= 0 && k < kPadSpan ? (int8_t)k : kLeadMidi;
+                press(n, padAct_[n], true, e.velocity());
+                lastPad_ = padAct_[n] >= 0 ? padCode(padAct_[n]) : n + 1;
+            }
+            else if (noteCount_[n] > 0 && --noteCount_[n] == 0)
+            {
+                press(n, padAct_[n], false, 0);
+                padAct_[n] = kNoAct;
+            }
         }
-        tp::app::setKeys(keys_);
-        tp::app::setButtons(buttons_);
     }
-
-    void allOff()
+    static int padCode(int k)
+    {
+        return k < kPadLeadN ? kPadLead0 + k : k < kPadLeadN + kPadFxN ? kPadFx0 + k - kPadLeadN
+                                                                      : kPadMove0 + k - kPadLeadN - kPadFxN;
+    }
+    static void press(int note, int act, bool down, int velocity)
+    {
+        using namespace tp;
+        if (act == kLeadMidi)
+            app::midiIn(down ? 0x09u | 0x90u << 8 | (uint32_t)note << 16 | (uint32_t)velocity << 24
+                             : 0x08u | 0x80u << 8 | (uint32_t)note << 16);
+        else if (act >= 0 && act < kPadLeadN) app::padLead(act, down);
+        else if (act >= kPadLeadN && act < kPadLeadN + kPadFxN) app::padFx(act - kPadLeadN, down);
+        else if (act >= kPadLeadN + kPadFxN && act < kPadSpan) app::padMove(act - kPadLeadN - kPadFxN, down);
+    }
+    // Everything held let go (all notes off, a change of Keys or Pad base).
+    void releaseHeld()
     {
         for (int n = 0; n < 128; ++n)
-            if (noteCount_[n] && (getInt(idxKeyMode_) != 0 || ((n < kKeyNote0 || n >= kKeyNote0 + tp::app::kNumKeys) &&
-                                                      (n < kButtonNote0 || n >= kButtonNote0 + tp::app::kNumButtons))))
-                tp::app::midiIn(0x08u | 0x80u << 8 | (uint32_t)n << 16);
+            if (noteCount_[n] && padAct_[n] != kNoAct) press(n, padAct_[n], false, 0);
+        forgetHeld();
+    }
+    // Everything held forgotten without telling the app (it was reset, or belongs to another instance now).
+    void forgetHeld()
+    {
         std::memset(noteCount_, 0, sizeof noteCount_);
-        keys_ = buttons_ = 0;
+        std::memset(padAct_, kNoAct, sizeof padAct_);
+    }
+    // The Pad field's text.
+    static std::string padText(int v)
+    {
+        char t[48];
+        if (v == kPadBusy) return kBusyText;
+        if (v >= 1 && v <= 128) std::snprintf(t, sizeof t, "Note %d", v - 1);
+        else if (v >= kPadLead0 && v < kPadFx0) std::snprintf(t, sizeof t, "Lead %d", v - kPadLead0 + 1);
+        else if (v >= kPadFx0 && v < kPadMove0) std::snprintf(t, sizeof t, "%s", tp::app::fxName(v - kPadFx0));
+        else if (v >= kPadMove0 && v < kPadCodes) std::snprintf(t, sizeof t, "%s", tp::app::moveName(v - kPadMove0));
+        else return " ";
+        return t;
     }
 
     // Sync: the MPC's transport as the FM-1's MIDI clock in (24 a beat, start, stop).
@@ -477,10 +617,10 @@ private:
     // What the app changed by itself (a piece, Evolve, a shake, the engine's macros) back to the MPC.
     // The status line's values now.
     struct Status { int v[kNumDisplay]; operator const int*() const { return v; } };
-    static Status status()
+    Status status() const
     {
         using namespace tp::app;
-        return {{view() + 1, chordCode(), perform() ? (locked() ? 2 : 1) : (locked() ? 3 : 0), held() ? 1 : 0}};
+        return {{lastPad_, chordCode(), held() ? 1 : 0, locked() ? 1 : 0}};
     }
 
     // The status values that changed since they were last sent, to the MPC (it redraws only what it is
@@ -502,8 +642,8 @@ private:
         {
             if (now[k] == displaySent_[k].load(std::memory_order_relaxed)) continue;
             displaySent_[k].store(now[k], std::memory_order_release);
-            setNormalised(kDispPage + k, param(kDispPage + k).toNormalised((float)now[k]));
-            notifyHostParameterChanged(kDispPage + k);
+            setNormalised(kDispPad + k, param(kDispPad + k).toNormalised((float)now[k]));
+            notifyHostParameterChanged(kDispPad + k);
             ++sent;
         }
         return sent;
@@ -530,9 +670,16 @@ private:
                 case Kind::Voice: v = app::par(d.code); break;
                 case Kind::Piece: v = app::piece(); break;
                 case Kind::Walk: v = app::walkValue(); break;
+                case Kind::Switch: v = switchValue(d.code) ? 1 : 0; break;
+                case Kind::Action: v = 0; break;
+                case Kind::Step: v = app::step(d.code) ? 1 : 0; break;
+                case Kind::Accent: v = app::accent(d.code) ? 1 : 0; break;
+                case Kind::ChordRoot: v = app::chordRoot(); break;
                 default: continue;
             }
-            if (v == appVal_[i].load(std::memory_order_relaxed) || dirty_[i].load(std::memory_order_acquire)) continue;
+            if (v == appVal_[i].load(std::memory_order_relaxed) || dirty_[i].load(std::memory_order_acquire) ||
+                (int32_t)(chunks_ - settle_[i]) < 0)
+                continue;
             appVal_[i].store(v, std::memory_order_release);
             setNormalised(i, param(i).toNormalised((float)(isChoice(i) ? v - lo_[i] : v)));
             notifyHostParameterChanged(i);
@@ -562,15 +709,17 @@ private:
     std::atomic<int> wanted_[tp::kNumControls];
     std::atomic<bool> dirty_[tp::kNumControls];
     int mirrorFrom_ = 0;
+    uint32_t settle_[tp::kNumControls] = {};   // (a switch keeps the MPC's value till this chunk)
+    int lastPad_ = 0;     // (the status line's Pad: kPad*)
     std::atomic<int> displaySent_[kNumDisplay] = {{INT_MIN}, {INT_MIN}, {INT_MIN}, {INT_MIN}};   // (INT_MIN: never)
     std::atomic<bool> displayReset_{true};   // send every status value again (a boot, a load)
     std::atomic<bool> displayFix_{false};    // the MPC wrote over a status value
     int sinceFix_ = kFixFrames;
-    int idxSync_ = 0, idxKeyMode_ = 0;
+    int idxSync_ = 0, idxKeyMode_ = 0, idxPadBase_ = 0;
 
-    // the panel
-    uint32_t keys_ = 0, buttons_ = 0;
+    // the notes held, and what each one's press did
     uint8_t noteCount_[128] = {};
+    int8_t padAct_[128];
 
     // Sync
     bool syncWas_ = false, unsyncPending_ = false, clockRunning_ = false, stoppedSent_ = false;
