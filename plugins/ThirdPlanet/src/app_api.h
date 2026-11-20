@@ -148,6 +148,27 @@ int barsToNextChord();            // bars until nextChordCode() sounds, the one 
 int loopStep(int seq);            // the step a sequence plays (seq 0..1)
 const char* slotLabel(int i, char* buf);   // (tests) ui.c's own slot_label(); buf: kChordTextMax
 
+// The log for the star-chart screen: who did what, so a nudge, a shake and Evolve's own nudges can be told apart.
+//   You     the actions above (setHold .. nudgeLayer), one event each; a nudge or a shake is followed by one
+//           kEvParam for each value it moved, and a shake's new voice (the Space's: its echo time) is a kEvVoice.
+//           shakeAll() is the one kEvShakeAll, its values not listed. Setting what already is logs nothing.
+//   Evolve  each value ui.c nudge_tick moved, on a phrase's first bar: kEvParam.
+//   Piece   the piece changed (setPiece, or PRESET in the app): one kEvPiece. Evolve's values of the same frame, or
+//           of the frame after setPiece, are dropped with it.
+// Not logged: knob(), voice() and walk() (the MPC's knobs show themselves), pads, steps and slots, Motion's moves,
+// the walk's slots, the virtual panel's own gestures, boot() (which empties the log).
+// layer: kEvMute and kEvSolo, the layer (< kNumLayers); kEvNudge, kEvShake, kEvParam and kEvVoice, the nudge's layer
+// (< kNumNudge: 4 the Space, 5 the Atmosphere); else -1. param: kEvParam and kEvVoice, the parameter (P_*); else -1.
+// from, to: a parameter's values; kEvHold, kEvLock, kEvPlay, kEvMute and kEvSolo, off and on (0, 1); kEvPiece, the
+// pieces; else 0.
+enum Who : uint8_t { kWhoYou, kWhoEvolve, kWhoPiece };
+enum What : uint8_t { kEvParam, kEvVoice, kEvHold, kEvLock, kEvPlay, kEvForget, kEvNextChord,
+                      kEvNewChords, kEvShakeAll, kEvReset, kEvMute, kEvSolo, kEvNudge, kEvShake, kEvPiece };
+struct Event { Who who; What what; int8_t layer; int16_t param; int16_t from, to; };
+constexpr int kNumEvents = 64;
+int takeEvents(Event* out, int max);   // the oldest first, up to max, taken out of the ring (kNumEvents entries;
+                                       // the oldest dropped on overflow). On the audio thread, as everything here
+
 // The project as the FM-1 would save it (bytes, or -1 if max is too small).
 int snapshot(uint8_t* dst, int max);
 

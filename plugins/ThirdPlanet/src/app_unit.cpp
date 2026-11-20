@@ -122,6 +122,42 @@ namespace app {
 static double audio_due_ms;
 static uint32_t ui_due;
 
+// The log's ring (app_api.h): written and taken on the audio thread only. These are the plugin's own variables,
+// outside power.h's sections, so boot() empties the ring itself.
+static Event ev_ring[kNumEvents];
+static uint32_t ev_w, ev_n;       // events ever written; events waiting (the newest kNumEvents at most)
+static bool ev_piece_frame;       // the piece changed since the last frame: that frame's Evolve events are dropped
+static void evPush(Who who, What what, int layer, int param, int from, int to)
+{
+    ev_ring[ev_w++ % kNumEvents] = Event{who, what, (int8_t)layer, (int16_t)param, (int16_t)from, (int16_t)to};
+    if (ev_n < (uint32_t)kNumEvents) ev_n++;
+}
+int takeEvents(Event* out, int max)
+{
+    int n = 0;
+    for (; n < max && ev_n; n++, ev_n--)
+        out[n] = ev_ring[(ev_w - ev_n) % kNumEvents];
+    return n;
+}
+// A nudge's values: what differs in proj.par from `was`, one event each. Never the slots (the walk's, prog_take's),
+// the walk's character and Loop, or Sequence 2's octave (Motion shifts it): no nudge moves them. `voice`: the
+// parameter that is a shake's new voice, -1 none. Returns the events (at most max).
+static int evDiff(const int16_t* was, int layer, int voice, Event* out, int max, Who who)
+{
+    int n = 0;
+    for (int p = 0; p < P_NPARAMS && n < max; p++)
+    {
+        if (proj.par[p] == was[p] || (p >= P_CR0 && p <= P_CX7) || p == P_PMODE || p == P_SEQ2OCT) continue;
+        int l = layer;
+        for (int i = 0; l < 0 && i < NNUDGE; i++)   // (Evolve's: the layer whose value it is)
+            for (int j = 0; j < 6; j++)
+                if (NUDGE_PAR[i][j] == p) l = i;
+        out[n++] = Event{who, p == voice ? kEvVoice : kEvParam, (int8_t)l, (int16_t)p, was[p], proj.par[p]};
+    }
+    return n;
+}
+static_assert(P_CQ0 > P_CR0 && P_CQ7 < P_CX7 && P_CX7 - P_CR0 == 3 * EN_NPROG - 1, "the slots' parameters lie together");
+
 void boot()
 {
     now_ms = 0;
@@ -130,6 +166,8 @@ void boot()
     held_btn = held_keys = 0;
     memset(enc_acc, 0, sizeof enc_acc);
     midi_w = midi_r = 0;
+    ev_w = ev_n = 0;   // (the log starts empty: a power-on, or a project loaded, logs nothing)
+    ev_piece_frame = false;
     tp::power_on();   // every engine and app variable as at power-on (the FM-1's RAM cleared)
     en_init();
     project_load();
@@ -148,15 +186,43 @@ bool stepMs(int32_t* chunk)
         audio_due_ms += 256.0 * 1000.0 / 44100.0;
         rendered = true;
     }
-    if (now_ms >= ui_due)
+    const int piece_was = proj.piece;
+    Event evolve[8];
+    int n_evolve = 0;
+    const bool frame = now_ms >= ui_due;
+    if (frame)
     {
         ui_due = now_ms + 16;
+        // Evolve's nudges, for the log. ui_frame() begins with these three steps (ui.c), and each does nothing when
+        // run again in the same frame: s2_hand is cleared, prog_take() has taken the engine's slots, nudge_tick()
+        // has seen this bar (its last_pb). Run here first, in ui_frame()'s order, they are the frame's own, and what
+        // nudge_tick() alone moves can be read off: nothing input() does in the same frame (a knob, a held button's
+        // nudge, PRESET) is mistaken for Evolve's. ui.c is unchanged and so is what it does (tests/app_null.sh).
+        if (ui.s2_hand && !en_s2oct_shift) ui.s2_hand = 0;
+        prog_take();
+        if (en_phrase_bar == 0 && en_playing)   // (nudge_tick() nudges only on a phrase's first bar, playing)
+        {
+            int16_t was[P_NPARAMS];
+            memcpy(was, proj.par, sizeof was);
+            nudge_tick();
+            n_evolve = evDiff(was, -1, -1, evolve, 8, kWhoEvolve);
+        }
         ui_frame();
+        if (ev_piece_frame) n_evolve = 0;   // (setPiece() since the last frame: the new piece's line stands alone)
+        ev_piece_frame = false;
     }
     else
     {
         ui_input_only();
     }
+    if (proj.piece != piece_was)   // PRESET turned (input()): the piece's line, and no Evolve line beside it
+    {
+        n_evolve = 0;
+        ev_piece_frame = !frame;   // (between frames, as setPiece(): the next frame's too)
+        evPush(kWhoPiece, kEvPiece, -1, -1, piece_was, proj.piece);
+    }
+    for (int i = 0; i < n_evolve; i++)
+        evPush(evolve[i].who, evolve[i].what, evolve[i].layer, evolve[i].param, evolve[i].from, evolve[i].to);
     return rendered;
 }
 
@@ -214,7 +280,13 @@ void walk(int w)           // ALGO on the Chords page: the walk's character, its
 int walkValue() { return (proj.par[P_PMODE] & 3) % EN_NWALK; }
 void setPiece(int i)       // PRESET, set to a piece rather than stepped
 {
-    if (i != proj.piece) set_piece(i);
+    const int was = proj.piece;
+    if (i != was) set_piece(i);
+    if (proj.piece != was)
+    {
+        evPush(kWhoPiece, kEvPiece, -1, -1, was, proj.piece);
+        ev_piece_frame = true;
+    }
     ui.turn_t = plat_ms();
 }
 int par(int p) { return proj.par[p]; }
@@ -229,6 +301,7 @@ void play(bool on)
     if (on == (en_playing != 0)) return;
     if (on) { en_seed(plat_ms()); en_play(1); }
     else en_play(0);
+    evPush(kWhoYou, kEvPlay, -1, -1, !on, on);
 }
 
 // What the FM-1's screen shows, for the MPC's.
@@ -298,12 +371,14 @@ void setHold(bool on)
 {
     if (on == (en_frozen != 0)) return;
     en_freeze(on ? 1 : 0);
+    evPush(kWhoYou, kEvHold, -1, -1, !on, on);
     acted();
 }
 void setLock(bool on)
 {
     if (on == (ui.lock != 0)) return;
     lock_toggle();
+    evPush(kWhoYou, kEvLock, -1, -1, !on, on);
     acted();
 }
 bool muted(int l) { return l >= 0 && l < NLAYER && (ui.mutes & LAYER_MUTE[l]) == LAYER_MUTE[l]; }
@@ -313,6 +388,7 @@ void setMute(int l, bool on)
     if (on) ui.mutes |= LAYER_MUTE[l];
     else ui.mutes &= ~LAYER_MUTE[l];
     perf_mutes();
+    evPush(kWhoYou, kEvMute, l, -1, !on, on);
     acted();
 }
 bool soloed(int l) { return l >= 0 && l < NLAYER && (ui.solo & LAYER_MUTE[l]) == LAYER_MUTE[l]; }
@@ -322,11 +398,12 @@ void setSolo(int l, bool on)
     if (on) ui.solo |= LAYER_MUTE[l];
     else ui.solo &= ~LAYER_MUTE[l];
     perf_mutes();
+    evPush(kWhoYou, kEvSolo, l, -1, !on, on);
     acted();
 }
-void forget() { en_lead_forget(); acted(); }
-void nextChord() { en_next(); acted(); }
-void newChords() { en_prog_rewalk(); acted(); }
+void forget() { en_lead_forget(); evPush(kWhoYou, kEvForget, -1, -1, 0, 0); acted(); }
+void nextChord() { en_next(); evPush(kWhoYou, kEvNextChord, -1, -1, 0, 0); acted(); }
+void newChords() { en_prog_rewalk(); evPush(kWhoYou, kEvNewChords, -1, -1, 0, 0); acted(); }
 void shakeAll()
 {
     static const uint8_t ALL[5] = {0, 1, 2, 3, 5};   // (HOME held on: every layer but the space)
@@ -334,6 +411,7 @@ void shakeAll()
     for (int j = 0; j < 5; j++)
         nudge(ALL[j], NUDGE_SHAKE);
     nudge_quiet = 0;
+    evPush(kWhoYou, kEvShakeAll, -1, -1, 0, 0);   // (one line: its two dozen values would push everything else out)
     acted();
 }
 void resetPiece()
@@ -344,12 +422,21 @@ void resetPiece()
     mac_home();
     en_regrow();
     mark_dirty();
+    evPush(kWhoYou, kEvReset, -1, -1, 0, 0);
     acted();
 }
 void nudgeLayer(int l, bool shake)
 {
+    static const uint8_t VOICE[NNUDGE] = {P_CVOICE, P_SVOICE, P_LVOICE, P_S2VOICE, P_ETIME, P_NCHAR};   // (ui.c nudge)
     if (l < 0 || l >= NNUDGE) return;
+    int16_t was[P_NPARAMS];
+    Event moved[8];
+    memcpy(was, proj.par, sizeof was);
     nudge(l, shake ? NUDGE_SHAKE : NUDGE_HAND);
+    evPush(kWhoYou, shake ? kEvShake : kEvNudge, l, -1, 0, 0);
+    const int n = evDiff(was, l, shake ? VOICE[l] : -1, moved, 8, kWhoYou);   // (a shake: its voice and 6 values at most)
+    for (int i = 0; i < n; i++)
+        evPush(kWhoYou, moved[i].what, l, moved[i].param, moved[i].from, moved[i].to);
     acted();
 }
 bool step(int st) { return st >= 0 && st < 16 && (lane_steps(ui.lane) >> st & 1u); }

@@ -5,7 +5,11 @@
 //   3. a slot's chord number names exactly what ui.c's slot_label() does, on every piece and walk character;
 //   4. the next chord: Endless, the first slot from 1 that isn't a gap; Loop, the next slot that isn't a gap; and
 //      against the engine, with gaps between: the chord the engine actually brings, after barsToNextChord() bars;
-//   5. the ring is ui.c ring_dots' at random moments, stays put while held, and is absent at Drift Hold.
+//   5. the ring is ui.c ring_dots' at random moments, stays put while held, and is absent at Drift Hold;
+//   6. the event ring (takeEvents): a hand nudge and a shake are "You" with the parameters they moved, Evolve's
+//      nudges are "Evolve" with exactly the parameters nudge_tick moved on a phrase edge (also in the frame of a hand
+//      nudge, or of a panel knob turned), a piece change is one "Piece", and knobs, pads, boot, a loaded store and
+//      Motion log nothing; 100 events leave the newest 64, in order.
 //   c++ -std=c++17 -O2 -I plugins/ThirdPlanet/src -I deps/mpc-plugin-sdk/framework \
 //       plugins/ThirdPlanet/tests/test_screen.cpp plugins/ThirdPlanet/src/app_unit.cpp \
 //       plugins/ThirdPlanet/src/engine_unit.cpp plugins/ThirdPlanet/src/power.cpp \
@@ -445,6 +449,409 @@ void ring_matches_ui()
     CHECK(barsToChange() == -1, "Drift Hold: barsToChange %d", barsToChange());
 }
 
+// ------------------------------------------------------------------ the event ring ---
+struct Pars { int16_t v[P_NPARAMS]; };
+Pars pars()
+{
+    Pars s;
+    for (int p = 0; p < P_NPARAMS; p++)
+        s.v[p] = (int16_t)par(p);
+    return s;
+}
+std::vector<Event> drain()
+{
+    Event e[64];
+    const int n = takeEvents(e, 64);
+    return std::vector<Event>(e, e + n);
+}
+bool slotParam(int p) { return (p >= P_CR0 && p <= P_CX7) || p == P_PMODE || p == P_SEQ2OCT; }
+// What a nudge may move: ui.c NUDGE_PAR, by nudge layer; a shake's voice besides.
+const std::set<int> kNudgePar[kNumNudge] = {
+    {P_CATT, P_CCOL, P_CRES, P_DREL, P_PHASER, P_PEDAL}, {P_CUTOFF, P_DECAY, P_SACCENT}, {P_LTONE, P_LATT, P_VIB, P_GLIDE},
+    {P_S2CUT, P_S2DEC}, {P_ECHO, P_FEEDBACK, P_REVERB, P_SIZE, P_CLOUD}, {P_NCOL, P_NGRAIN, P_NTUNE, P_NROOM}};
+const int kShakeVoice[kNumNudge] = {P_CVOICE, P_SVOICE, P_LVOICE, P_S2VOICE, P_ETIME, P_NCHAR};
+
+// The events of who `who` are exactly the parameters that differ between a and b (but the slots'), each once, with
+// its values; `voice`: the parameter that must be a kEvVoice (-1 none).
+void checkDiff(const std::vector<Event>& ev, Who who, const Pars& a, const Pars& b, int layer, int voice, const char* what)
+{
+    std::set<int> seen;
+    for (const Event& e : ev)
+    {
+        if (e.who != who || (e.what != kEvParam && e.what != kEvVoice)) continue;
+        CHECK(e.param >= 0 && e.param < P_NPARAMS, "%s: param %d", what, e.param);
+        if (e.param < 0 || e.param >= P_NPARAMS) continue;
+        CHECK(seen.insert(e.param).second, "%s: param %d twice", what, e.param);
+        CHECK(e.from != e.to, "%s: param %d did not move (%d)", what, e.param, e.from);
+        CHECK(e.from == a.v[e.param] && e.to == b.v[e.param], "%s: param %d %d>%d, was %d>%d", what, e.param, e.from, e.to,
+              a.v[e.param], b.v[e.param]);
+        CHECK(e.layer == layer, "%s: param %d layer %d, want %d", what, e.param, e.layer, layer);
+        CHECK((e.what == kEvVoice) == (e.param == voice), "%s: param %d what %d", what, e.param, (int)e.what);
+        CHECK(!slotParam(e.param), "%s: slot param %d", what, e.param);
+    }
+    for (int p = 0; p < P_NPARAMS; p++)
+        if (a.v[p] != b.v[p] && !slotParam(p)) CHECK(seen.count(p), "%s: param %d moved %d>%d, no event", what, p, a.v[p], b.v[p]);
+}
+int count(const std::vector<Event>& ev, Who who)
+{
+    int n = 0;
+    for (const Event& e : ev)
+        n += e.who == who;
+    return n;
+}
+
+void hand_nudge_is_you()
+{
+    start(0);
+    knob(P_EVOLVE, 100);
+    run(300);
+    drain();
+    int moved_total = 0;
+    for (int l = 0; l < kNumNudge; l++)
+        for (int shake = 0; shake < 2; shake++)
+        {
+            char what[32];
+            std::snprintf(what, sizeof what, "%s %d", shake ? "shake" : "nudge", l);
+            const Pars a = pars();
+            nudgeLayer(l, shake != 0);
+            const Pars b = pars();
+            const std::vector<Event> ev = drain();
+            CHECK(!ev.empty() && ev[0].who == kWhoYou && ev[0].what == (shake ? kEvShake : kEvNudge) && ev[0].layer == l,
+                  "%s: first event", what);
+            CHECK(count(ev, kWhoYou) == (int)ev.size(), "%s: not all You", what);
+            for (size_t i = 1; i < ev.size(); i++)
+            {
+                CHECK(ev[i].what == kEvParam || ev[i].what == kEvVoice, "%s: event %d what %d", what, (int)i, (int)ev[i].what);
+                CHECK(kNudgePar[l].count(ev[i].param) || (shake && ev[i].param == kShakeVoice[l]), "%s: param %d not the layer's",
+                      what, ev[i].param);
+            }
+            checkDiff(ev, kWhoYou, a, b, l, shake ? kShakeVoice[l] : -1, what);
+            if (shake) CHECK(a.v[kShakeVoice[l]] != b.v[kShakeVoice[l]], "%s: no new voice", what);
+            if (!shake)
+            {
+                // (3-4 values, but a layer with fewer has them all, and a value at its end may stay)
+                const int most = (int)kNudgePar[l].size() < 4 ? (int)kNudgePar[l].size() : 4;
+                CHECK((int)ev.size() - 1 >= 1 && (int)ev.size() - 1 <= most, "%s: %d params", what, (int)ev.size() - 1);
+                moved_total += (int)ev.size() - 1;
+            }
+            // nothing of it is Evolve's in the frames after (bars 1.. of the phrase: no nudge of Evolve's own is due)
+            if (phraseBar() != 0 && phraseBar() != 7)
+            {
+                run(40);
+                CHECK(drain().empty(), "%s: events in the frames after", what);
+            }
+        }
+    CHECK(moved_total >= 10, "hand nudges moved %d params", moved_total);
+    // the brief's case: the Sequence nudged, by hand
+    start(2);
+    drain();
+    nudgeLayer(1, false);
+    std::vector<Event> ev = drain();
+    CHECK(ev.size() >= 4 && ev.size() <= 5 && ev[0].what == kEvNudge && ev[0].who == kWhoYou && ev[0].layer == 1, "nudge 1");
+    for (size_t i = 1; i < ev.size(); i++)
+        CHECK(ev[i].who == kWhoYou && ev[i].what == kEvParam && ev[i].from != ev[i].to, "nudge 1 line %d", (int)i);
+    run(33);
+    CHECK(count(drain(), kWhoEvolve) == 0, "Evolve after a hand nudge");
+    // the other actions: one line each, and none for what already is
+    struct { What what; int layer, from, to; } want[] = {
+        {kEvHold, -1, 0, 1}, {kEvHold, -1, 1, 0}, {kEvLock, -1, 0, 1}, {kEvLock, -1, 1, 0}, {kEvPlay, -1, 1, 0}, {kEvPlay, -1, 0, 1},
+        {kEvForget, -1, 0, 0}, {kEvNextChord, -1, 0, 0}, {kEvNewChords, -1, 0, 0}, {kEvMute, 3, 0, 1}, {kEvMute, 3, 1, 0},
+        {kEvSolo, 4, 0, 1}, {kEvSolo, 4, 1, 0}, {kEvShakeAll, -1, 0, 0}, {kEvReset, -1, 0, 0}};
+    // (Hold and Play are the engine's, taken at its next block: the same again counts as nothing only after it)
+    setHold(true), run(10), setHold(true), setHold(false), run(10), setHold(false);
+    setLock(true), setLock(true), setLock(false);
+    play(false), run(10), play(false), play(true), run(10), play(true);
+    forget(), nextChord(), newChords();
+    setMute(3, true), setMute(3, true), setMute(9, true), setMute(3, false);
+    setSolo(4, true), setSolo(4, false), setSolo(-1, true);
+    nudgeLayer(-1, false), nudgeLayer(kNumNudge, true);
+    shakeAll(), resetPiece();
+    ev = drain();
+    const int nwant = (int)(sizeof want / sizeof want[0]);
+    CHECK((int)ev.size() == nwant, "actions: %d events, want %d", (int)ev.size(), nwant);
+    for (int i = 0; i < nwant && i < (int)ev.size(); i++)
+        CHECK(ev[i].who == kWhoYou && ev[i].what == want[i].what && ev[i].layer == want[i].layer && ev[i].from == want[i].from &&
+                  ev[i].to == want[i].to && ev[i].param == -1,
+              "action %d: what %d layer %d %d>%d param %d", i, (int)ev[i].what, ev[i].layer, ev[i].from, ev[i].to, ev[i].param);
+}
+
+// One ms, checked: Evolve's events are exactly what moved (but the slots'), on a phrase's first bar, just come.
+// Returns Evolve's events.
+struct Edge { int since0 = 1000; };   // ms since the phrase's bar was last seen not 0
+std::vector<Event> evolveMs(Edge& g, const char* what)
+{
+    const Pars a = pars();
+    stepMs(chunk);
+    const Pars b = pars();
+    const std::vector<Event> ev = drain();
+    CHECK(count(ev, kWhoEvolve) == (int)ev.size(), "%s: an event not Evolve's", what);
+    checkDiff(ev, kWhoEvolve, a, b, ev.empty() ? -1 : ev[0].layer, -1, what);
+    if (!ev.empty())
+    {
+        CHECK(phraseBar() == 0 && g.since0 <= 17, "%s: not at a phrase edge (bar %d, %d ms)", what, phraseBar(), g.since0);
+        CHECK(ev.size() <= 2, "%s: %d values", what, (int)ev.size());
+        for (const Event& e : ev)
+            CHECK(e.layer >= 0 && e.layer < kNumNudge && kNudgePar[e.layer].count(e.param), "%s: param %d layer %d", what, e.param, e.layer);
+    }
+    g.since0 = phraseBar() == 0 ? g.since0 + 1 : 0;
+    return ev;
+}
+
+void evolve_is_evolve()
+{
+    start(4);
+    knob(P_EVOLVE, 100);
+    knob(P_TEMPO, 140);
+    knob(P_MOTION, 100);   // (Motion moving its macros and Sequence 2's octave meanwhile: none of it Evolve's)
+    drain();
+    Edge g;
+    int nudges = 0, phrases = 0, lastBar = phraseBar();
+    for (int t = 0; phrases < 64 && t < 2000000; t++)
+    {
+        nudges += !evolveMs(g, "evolve").empty();
+        if (phraseBar() == 0 && lastBar != 0) phrases++;
+        lastBar = phraseBar();
+    }
+    CHECK(phrases == 64, "%d phrases", phrases);
+    CHECK(nudges >= 10 && nudges <= 45, "Evolve nudged %d of 64 phrases (40%% of them)", nudges);
+    // Lock, Hold, Evolve 40: it rests
+    knob(P_EVOLVE, 40);
+    for (int t = 0; t < 60000; t++)
+        CHECK(evolveMs(g, "evolve 40").empty(), "Evolve 40 nudged");
+}
+
+// The ms of Evolve's first `want` nudges from a fixed start (the same every run: boot() clears the seeds).
+void sameStart()
+{
+    start(1);
+    knob(P_EVOLVE, 100);
+    knob(P_TEMPO, 140);
+    drain();
+}
+void same_frame()
+{
+    std::vector<int> at;
+    std::vector<std::vector<Event>> base;
+    {
+        sameStart();
+        Edge g;
+        for (int t = 0; at.size() < 6 && t < 2000000; t++)
+        {
+            const std::vector<Event> ev = evolveMs(g, "same_frame base");
+            if (!ev.empty()) at.push_back(t), base.push_back(ev);
+        }
+        CHECK(at.size() == 6, "only %d Evolve nudges", (int)at.size());
+    }
+    // a hand nudge in the ms of an Evolve nudge (the hand's moves the seed Evolve draws from: try each edge and layer
+    // until Evolve nudges too, and once the same parameter)
+    int both = 0, chained = 0;
+    for (size_t k = 0; k < at.size(); k++)
+        for (int l = 0; l < kNumNudge; l++)
+        {
+            sameStart();
+            run(at[k]);
+            drain();   // (Evolve's nudges before this one)
+            const Pars a = pars();
+            nudgeLayer(l, false);
+            const Pars m = pars();
+            stepMs(chunk);
+            const Pars b = pars();
+            const std::vector<Event> ev = drain();   // (drained once: the ring keeps who did what)
+            std::vector<Event> you, evo;
+            bool order = true;
+            for (const Event& e : ev)
+            {
+                if (e.who == kWhoYou) order = order && evo.empty(), you.push_back(e);
+                else evo.push_back(e);
+            }
+            CHECK(order, "same_frame: Evolve before You");
+            CHECK(!you.empty() && you[0].what == kEvNudge && you[0].layer == l, "same_frame: the hand's nudge");
+            CHECK(count(evo, kWhoEvolve) == (int)evo.size(), "same_frame: a third who");
+            checkDiff(you, kWhoYou, a, m, l, -1, "same_frame you");
+            checkDiff(evo, kWhoEvolve, m, b, evo.empty() ? -1 : evo[0].layer, -1, "same_frame evolve");
+            both += !evo.empty();
+            for (const Event& e : evo)
+                for (const Event& y : you)
+                    if (y.what == kEvParam && y.param == e.param)
+                    {
+                        CHECK(y.to == e.from, "same_frame: param %d %d>%d then %d>%d", e.param, y.from, y.to, e.from, e.to);
+                        chained++;
+                    }
+        }
+    CHECK(both >= 5, "same_frame: both in %d runs", both);
+    CHECK(chained >= 1, "same_frame: no parameter moved by both");
+    // a panel knob turned in Evolve's frame (ui.c input(), after nudge_tick): Evolve's events are what they were
+    // without it, the knob's move nobody's
+    static const int kViewBtn[] = {kENV, kARP, kLFO, kSEQ, kFX};
+    int turned = 0;
+    for (size_t k = 0; k < at.size(); k++)
+    {
+        sameStart();
+        setButtons(1u << kViewBtn[k % 5]);   // a tap: the layer's page, its knobs the layer's sound
+        run(60);
+        setButtons(0);
+        run(at[k] - 60);
+        drain();
+        const Pars a = pars();
+        setAccelOff(true);
+        for (int e = kK1; e <= kK4; e++)
+            turn(e, 3);
+        stepMs(chunk);
+        const Pars b = pars();
+        const std::vector<Event> ev = drain();
+        CHECK(ev.size() == base[k].size(), "panel %d: %d events, %d without the knobs", (int)k, (int)ev.size(), (int)base[k].size());
+        for (size_t i = 0; i < ev.size() && i < base[k].size(); i++)
+            CHECK(ev[i].who == kWhoEvolve && ev[i].what == base[k][i].what && ev[i].param == base[k][i].param &&
+                      ev[i].from == base[k][i].from && ev[i].to == base[k][i].to && ev[i].layer == base[k][i].layer,
+                  "panel %d: event %d differs", (int)k, (int)i);
+        int knobs = 0;
+        for (int p = 0; p < P_NPARAMS; p++)
+        {
+            bool evolves = false;
+            for (const Event& e : ev)
+                evolves |= e.param == p;
+            knobs += a.v[p] != b.v[p] && !evolves && !slotParam(p);
+        }
+        turned += knobs;
+    }
+    CHECK(turned >= 6, "panel: the knobs moved %d values in Evolve's frames", turned);
+}
+
+void not_logged()
+{
+    start(3);
+    knob(P_EVOLVE, 0);
+    drain();
+    knob(P_CUTOFF, par(P_CUTOFF) > 50 ? 20 : 90);
+    knob(P_TEMPO, 133);
+    knob(kKnobFilter, 30);
+    voice(P_SVOICE, par(P_SVOICE) + 1);
+    walk(walkValue() + 1);
+    run(40);
+    CHECK(drain().empty(), "knobs logged");
+    for (int d = 0; d < 16; d++)
+        padLead(d, true), run(5), padLead(d, false);
+    for (int e = 0; e < kNumFx; e++)
+        padFx(e, true), run(5), padFx(e, false);
+    for (int m = 0; m < kNumMoves; m++)
+        padMove(m, true), run(5), padMove(m, false);
+    setStep(3, !step(3));
+    setChordRoot((chordRoot() + 13) % 12);
+    run(40);
+    CHECK(drain().empty(), "pads logged");
+    // Motion 100, 30 s: its macros, Sequence 2's octave and the walk's slots move, and nothing is logged
+    knob(P_MOTION, 100);
+    knob(P_TEMPO, 140);
+    run(30000);
+    CHECK(drain().empty(), "Motion logged");
+    // boot() clears the ring; a loaded store logs nothing
+    setHold(true);
+    nudgeLayer(0, false);
+    static uint8_t blob[kStoreMax];
+    const int n = snapshot(blob, kStoreMax);
+    CHECK(n > 0, "snapshot");
+    boot();
+    CHECK(drain().empty(), "boot() left events");
+    setMute(0, true);
+    storeWrite(blob, n);
+    boot();
+    CHECK(drain().empty(), "a loaded store logged");
+    run(200);
+    CHECK(drain().empty(), "a loaded store logged, running");
+    storeWrite(nullptr, -1);
+}
+
+void piece_events()
+{
+    start(0);
+    knob(P_EVOLVE, 100);
+    std::vector<Event> ev = drain();   // (start()'s own: Play)
+    CHECK(count(ev, kWhoPiece) == 0, "start(0): a Piece");   // (boot's piece is 0: setPiece(0) changes nothing)
+    const int was = piece();
+    setPiece(3);
+    run(17);   // the call and the frame after it
+    ev = drain();
+    CHECK(ev.size() == 1 && ev[0].who == kWhoPiece && ev[0].what == kEvPiece && ev[0].from == was && ev[0].to == 3 && ev[0].layer == -1 &&
+              ev[0].param == -1,
+          "setPiece(3): %d events", (int)ev.size());
+    setPiece(3);
+    run(17);
+    CHECK(drain().empty(), "setPiece to the piece playing logged");
+    // every piece change, on any ms of the 16: one Piece, nothing of Evolve's with it
+    for (int k = 0; k < 40; k++)
+    {
+        run(1 + k * 7 % 23);
+        drain();
+        const int to = (piece() + 1 + k % 3) % 10;
+        setPiece(to);
+        run(17);
+        ev = drain();
+        CHECK(ev.size() == 1 && ev[0].what == kEvPiece && ev[0].who == kWhoPiece && ev[0].to == to, "setPiece %d: %d events", to,
+              (int)ev.size());
+    }
+    // PRESET turned on the panel: the app's own piece change, one Piece
+    setAccelOff(true);
+    for (int k = 0; k < 20; k++)
+    {
+        run(3 + k * 5 % 29);
+        drain();
+        const int from = piece();
+        turn(kPRESET, 1);
+        run(17);
+        ev = drain();
+        CHECK(piece() != from, "PRESET did not change the piece");
+        CHECK(ev.size() == 1 && ev[0].what == kEvPiece && ev[0].who == kWhoPiece && ev[0].from == from && ev[0].to == piece(),
+              "PRESET: %d events", (int)ev.size());
+    }
+    // PRESET turned in the frame of an Evolve nudge: the Piece, and Evolve's dropped
+    start(1);
+    knob(P_EVOLVE, 100);
+    knob(P_TEMPO, 140);
+    drain();
+    int t = 0;
+    for (; t < 2000000; t++)
+    {
+        stepMs(chunk);
+        if (!drain().empty()) break;
+    }
+    start(1);
+    knob(P_EVOLVE, 100);
+    knob(P_TEMPO, 140);
+    setAccelOff(true);
+    run(t);
+    drain();
+    turn(kPRESET, 1);
+    stepMs(chunk);
+    ev = drain();
+    CHECK(ev.size() == 1 && ev[0].what == kEvPiece && ev[0].from == 1 && ev[0].to == piece(), "PRESET in Evolve's frame: %d events",
+          (int)ev.size());
+}
+
+void overflow()
+{
+    boot();
+    drain();
+    bool on[kNumLayers] = {};
+    for (int i = 0; i < 100; i++)
+        setMute(i % kNumLayers, on[i % kNumLayers] = !on[i % kNumLayers]);
+    Event e[80];
+    const int n = takeEvents(e, 80);
+    CHECK(n == 64, "overflow: %d events", n);
+    for (int k = 0; k < n; k++)
+    {
+        const int i = 36 + k;
+        CHECK(e[k].who == kWhoYou && e[k].what == kEvMute && e[k].layer == i % kNumLayers && e[k].to == (i / kNumLayers % 2 == 0),
+              "overflow: event %d", k);
+    }
+    CHECK(takeEvents(e, 80) == 0, "overflow: not drained");
+    // taken a few at a time: the oldest first, the rest kept
+    for (int i = 0; i < 10; i++)
+        setSolo(i % kNumLayers, i < kNumLayers);
+    CHECK(takeEvents(e, 4) == 4 && e[0].layer == 0 && e[3].layer == 3 && e[0].to == 1, "take 4");
+    CHECK(takeEvents(e, 0) == 0, "take 0");
+    CHECK(takeEvents(e, 64) == 6 && e[0].layer == 4 && e[1].layer == 0 && e[1].to == 0, "take the rest");
+}
+
 } // namespace
 
 int main()
@@ -455,6 +862,12 @@ int main()
     next_chord();
     next_chord_engine();
     ring_matches_ui();
+    hand_nudge_is_you();
+    evolve_is_evolve();
+    same_frame();
+    not_logged();
+    piece_events();
+    overflow();
     if (fails)
     {
         std::printf("test_screen: %d failures\n", fails);
