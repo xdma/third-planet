@@ -125,6 +125,10 @@ float layerActivity(int layer);   // how much the layer sounds now, 0..1 (layer 
 bool layerHeard(int layer);       // the layer not muted and not soloed out (ui.c perf_sounds)
 float filterDrift(int layer);     // the layer's filter drift, in octaves
 int densityShift();               // Density's slow drift, in its units (+ denser, - sparser)
+int filterHeading(int layer);     // which way the filter drift goes (en_fo_dir): +1 up, -1 down, 0 settled. It moves
+                                  // further out while this has filterDrift()'s sign (ui.c move_state)
+int densityHeading();             // which way Density's drift goes (en_dd_dir): +1 further from the knob's value,
+                                  // -1 back towards it, 0 settled
 uint32_t seqHits(int seq);        // each sequence's notes so far (seq 0..1)
 uint32_t seqReps(int seq);        // each sequence's repeats so far
 int ringDots(bool* lastBar);      // ui.c ring_dots: the chord's progress in dots, 0..32, -1 no ring (Drift Hold);

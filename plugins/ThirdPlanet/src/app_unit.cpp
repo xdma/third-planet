@@ -528,6 +528,12 @@ float layerActivity(int l) { return l >= 0 && l < NLAYER ? en_layer_act[l] : 0.0
 bool layerHeard(int l) { return l >= 0 && l < NLAYER && perf_sounds(l); }
 float filterDrift(int l) { return l >= 0 && l < NLAYER ? en_fo[l] : 0.0f; }
 int densityShift() { return en_dd_shift; }
+int filterHeading(int l)
+{
+    const int d = l >= 0 && l < NLAYER ? en_fo_dir[l] : 0;
+    return d > 0 ? 1 : d < 0 ? -1 : 0;
+}
+int densityHeading() { return en_dd_dir > 0 ? 1 : en_dd_dir < 0 ? -1 : 0; }
 uint32_t seqHits(int q) { return q >= 0 && q < 2 ? en_seq_hits[q] : 0u; }
 uint32_t seqReps(int q) { return q >= 0 && q < 2 ? en_seq_reps[q] : 0u; }
 // ring_dots keeps what it last showed while held: called here too, it is called with the same inputs as the app's

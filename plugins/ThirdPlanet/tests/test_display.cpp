@@ -265,10 +265,12 @@ void expected(ThirdPlanet& p, double* w)
         w[xPlanet + l] = sky.planetFrame(l);
         float d = filterDrift(l);
         d = d < -4.5f ? -4.5f : d > 4.5f ? 4.5f : d;
-        w[xDrift + l] = std::lround(d * 10.0f);
+        const long tenths = std::lround(d * 10.0f);
+        const bool out = filterHeading(l) != 0 && (d > 0.0f) == (filterHeading(l) > 0);
+        w[xDrift + l] = out || tenths == 0 ? tenths : tenths + (tenths > 0 ? 100 : -100);   // (not moving out: 100 further)
     }
     for (int n = 0; n < 3; ++n) w[xLog + n] = sky.logSerial(n) % 1024;
-    w[xDensity] = densityShift();
+    w[xDensity] = densityHeading() > 0 || densityShift() == 0 ? densityShift() : densityShift() + (densityShift() > 0 ? 200 : -200);
     const int lane = knobValue(kKnobLane);
     w[xStep] = playing() ? loopStep(lane == 1 || lane == 3 ? 1 : 0) : 16;
     w[xExt] = external();
@@ -306,6 +308,44 @@ struct Lag
                   worst[k], limit(k, bs));
     }
 };
+
+// The drifts' texts as the FM-1 words them (ui.c draw_main: "MOVING" while the drift goes further out), from the
+// engine's state now; checked where the parameter is up to date. forms: how often each wording was seen.
+struct DriftForms { long moving = 0, still = 0, blank = 0, densMoving = 0, densStill = 0; };
+void driftTexts(ThirdPlanet& p, DriftForms& f)
+{
+    using namespace tp::app;
+    double w[xCount];
+    expected(p, w);
+    char t[64];
+    for (int l = 0; l < 5; ++l)
+    {
+        if (p.get(kD0 + xDrift + l) != w[xDrift + l]) continue;
+        const float d = filterDrift(l);
+        const int tenths = (int)std::lround(std::fabs(d < -4.5f ? -4.5f : d > 4.5f ? 4.5f : d) * 10.0f);
+        const bool out = filterHeading(l) != 0 && (d > 0.0f) == (filterHeading(l) > 0);
+        if (tenths == 0) std::snprintf(t, sizeof t, " "), ++f.blank;
+        else
+        {
+            std::snprintf(t, sizeof t, "%s%s %s%d.%d OCT", out ? "MOVING " : "", d < 0 ? "DARKER" : "BRIGHTER",
+                          d < 0 ? "\xE2\x88\x92" : "+", tenths / 10, tenths % 10);
+            ++(out ? f.moving : f.still);
+        }
+        CHECK(text(p, kD0 + xDrift + l) == t, "drift %d shows '%s', the engine (%.3f oct, heading %d) says '%s'", l + 1,
+              text(p, kD0 + xDrift + l).c_str(), (double)d, filterHeading(l), t);
+    }
+    if (p.get(kD0 + xDensity) != w[xDensity]) return;
+    const int s = densityShift(), a = s < 0 ? -s : s;
+    if (a < 3) std::snprintf(t, sizeof t, " ");
+    else
+    {
+        std::snprintf(t, sizeof t, "%s%s %s%d", densityHeading() > 0 ? "MOVING " : "", s < 0 ? "SPARSER" : "DENSER",
+                      s < 0 ? "\xE2\x88\x92" : "+", a);
+        ++(densityHeading() > 0 ? f.densMoving : f.densStill);
+    }
+    CHECK(text(p, kD0 + xDensity) == t, "density shows '%s', the engine (%d, heading %d) says '%s'", text(p, kD0 + xDensity).c_str(), s,
+          densityHeading(), t);
+}
 
 std::string upper(const char* s)
 {
@@ -427,6 +467,7 @@ void budgetPerBlock()
         Lag lag;
         std::vector<long> stale((size_t)tp::kNumControls, 0);
         std::vector<long> sentAt((size_t)xCount, -1000000);
+        DriftForms forms;
         long soonest = 1000000, bothHalves = 0;
         std::string soonestId;
         long worstCtl = 0, blocks = 0, total = 0, shown = 0;
@@ -448,6 +489,7 @@ void budgetPerBlock()
             }
             bothHalves += half[0] && half[1];
             lag.block(*p, n, done > 44100);
+            if (blocks % 8 == 0) driftTexts(*p, forms);
             for (int i = 0; i < tp::kNumControls; ++i)
             {
                 int v;
@@ -477,12 +519,30 @@ void budgetPerBlock()
         char what[48];
         std::snprintf(what, sizeof what, "budget_per_block (%d)", bs);
         lag.check(bs, what);
+        std::printf("  drift texts checked: %ld moving, %ld not, %ld blank; density %ld moving, %ld not\n", forms.moving, forms.still,
+                    forms.blank, forms.densMoving, forms.densStill);
+        CHECK(forms.moving > 0 && forms.still > 0 && forms.blank > 0, "blocks of %d: a filter drift wording was never seen", bs);
         std::string still;   // (what this run never moved is checked by its texts and range only)
         const std::vector<std::string> ids = displayIds();
         for (int k = 0; k < xCount; ++k)
             if (lag.seen[k].size() < 2) still += " " + ids[(size_t)k];
         std::printf("  never changed:%s\n", still.empty() ? " none" : still.c_str());
     }
+}
+
+// The drifts' wordings against the engine over a long play with Motion full up: each one is seen, Density's too
+// (its drift turns once in 16 to 40 bars).
+void driftWordings()
+{
+    auto p = make();
+    if (p->numParams() != kD0 + xCount) { CHECK(false, "drift wordings: the display parameters are missing"); return; }
+    p->setNormalised(idx("motion"), 1.0f);
+    p->setNormalised(idx("tempo"), 1.0f);
+    DriftForms f;
+    runBlocks(*p, 40 * 60 * 44100L, 512, [&](long, int) { driftTexts(*p, f); });
+    std::printf("drift wordings: filter %ld moving, %ld not, %ld blank; density %ld moving, %ld not\n", f.moving, f.still, f.blank,
+                f.densMoving, f.densStill);
+    CHECK(f.moving > 0 && f.still > 0 && f.blank > 0 && f.densMoving > 0 && f.densStill > 0, "a drift wording was never seen");
 }
 
 // rest_sends_nothing: Play off; once the particles alive have faded (their life, about 3 s: ruling R13) and the
@@ -549,13 +609,59 @@ void loadAndBusy()
     CHECK(text(*q, kDispPad) == kBusyText, "second instance's Pad shows '%s'", text(*q, kDispPad).c_str());
     // (one that loaded a project's display values shows none of them)
     q->internalLoadState(saved.data(), saved.size());
-    runBlocks(*q, 22050, 128);
+    runBlocks(*q, 44100, 128);
     const std::vector<std::string> ids = displayIds();
     auto fresh = make();
     for (int k = 1; k < xCount; ++k)
         CHECK(q->get(kD0 + k) == fresh->get(kD0 + k), "a second instance with a project shows %s = %g", ids[(size_t)k].c_str(),
               (double)q->get(kD0 + k));
     CHECK(text(*q, kDispPad) == kBusyText, "second instance's Pad shows '%s' after a load", text(*q, kDispPad).c_str());
+}
+
+// load_holds: for half a second after a project load nothing of the display is sent or corrected, so the MPC
+// keeps the values it loaded; then every one is sent, and all are true within the second after.
+void loadHolds()
+{
+    auto p = make();
+    if (p->numParams() != kD0 + xCount) { CHECK(false, "load_holds: the display parameters are missing"); return; }
+    runBlocks(*p, 4 * 44100L, 128);
+    p->set(idx("nudge_seq"), 1.0f);
+    runBlocks(*p, 8 * 44100L, 128);
+    const std::vector<uint8_t> saved = p->internalSaveState();
+    std::vector<float> was;
+    for (int k = 0; k < xCount; ++k) was.push_back(p->get(kD0 + k));
+    runBlocks(*p, 3 * 44100L, 128);
+    for (int bs : {32, 128, 512})
+    {
+        CHECK(p->internalLoadState(saved.data(), saved.size()), "the project did not load");
+        long early = 0, firstSend = -1, kept = 0;
+        std::set<int> sentAfter;
+        Lag lag;
+        runBlocks(*p, 22050 + 44100, bs, [&](long done, int n) {
+            for (int i : notified)
+                if (i >= kD0)
+                {
+                    if (done <= 22050) ++early;
+                    else sentAfter.insert(i - kD0);
+                    if (firstSend < 0) firstSend = done;
+                }
+            if (done > 4410 && done <= 4410 + bs) p->setNormalised(kD0 + xRing, 1.0f);   // (the MPC writes over one meanwhile)
+            if (done > 22050 - bs && done <= 22050)
+            {
+                for (int k = 0; k < xCount; ++k) kept += k == xRing || std::fabs(p->get(kD0 + k) - was[(size_t)k]) < 0.0005f;
+                CHECK(p->getInt(kD0 + xRing) == 99, "the ring written over during the hold shows %d", p->getInt(kD0 + xRing));
+            }
+            lag.block(*p, n, false);
+        });
+        CHECK(early == 0, "blocks of %d: %ld display sends in the half second after a load", bs, early);
+        CHECK(kept == xCount, "blocks of %d: only %ld of %d display values were as loaded at the end of the hold", bs, kept, (int)xCount);
+        CHECK(firstSend > 22050 && firstSend <= 22050 + 2 * bs, "blocks of %d: the first display send %ld frames after the load", bs, firstSend);
+        CHECK((int)sentAfter.size() == xCount, "blocks of %d: %zu of %d display values were sent after the hold", bs, sentAfter.size(), (int)xCount);
+        const std::vector<std::string> ids = displayIds();
+        for (int k = 0; k < xCount; ++k)
+            CHECK(lag.now[k] <= Lag::limit(k, bs), "blocks of %d: a second after the hold %s is not true (%ld frames behind)", bs,
+                  ids[(size_t)k].c_str(), lag.now[k]);
+    }
 }
 
 // A text the MPC shows whole: at most 31 bytes of well-formed UTF-8, in ASCII and the glyphs its fonts have.
@@ -627,13 +733,17 @@ void textsFit()
     shows(xSlotName + 3, 0, " ");
     shows(xDrift, 0, " "), shows(xDrift, -12, "MOVING DARKER \xE2\x88\x92" "1.2 OCT"), shows(xDrift + 4, 7, "MOVING BRIGHTER +0.7 OCT");
     shows(xDrift + 2, -45, "MOVING DARKER \xE2\x88\x92" "4.5 OCT");
+    shows(xDrift, -112, "DARKER \xE2\x88\x92" "1.2 OCT"), shows(xDrift + 1, 108, "BRIGHTER +0.8 OCT"), shows(xDrift, 145, "BRIGHTER +4.5 OCT");
     shows(xDensity, 0, " "), shows(xDensity, 12, "MOVING DENSER +12"), shows(xDensity, -100, "MOVING SPARSER \xE2\x88\x92" "100");
+    shows(xDensity, -7, "MOVING SPARSER \xE2\x88\x92" "7"), shows(xDensity, 2, " "), shows(xDensity, 202, " ");
+    shows(xDensity, 212, "DENSER +12"), shows(xDensity, -207, "SPARSER \xE2\x88\x92" "7"), shows(xDensity, -300, "SPARSER \xE2\x88\x92" "100");
     shows(xExt, 0, " "), shows(xExt, 1, "EXT"), shows(xSource, 0, " "), shows(xSource, 1, "PERFORMER");
     const mpc::Param& in = p->param(kD0 + xNextIn);
     CHECK(in.min == -2.0f && in.max == 64.0f, "d_next_in runs %g..%g", (double)in.min, (double)in.max);
     CHECK(p->param(kD0 + xProg).max == 67.0f && p->param(kD0 + xRing).max == 99.0f && p->param(kD0 + xLog).max == 1023.0f &&
               p->param(kD0 + xPlanet).max == 23.0f && p->param(kD0 + xStep).max == 16.0f && p->param(kD0 + xPhrase).max == 8.0f &&
-              p->param(kD0 + xSlot).max == 3.0f && p->param(kD0 + xDrift).min == -45.0f && p->param(kD0 + xDensity).min == -100.0f,
+              p->param(kD0 + xSlot).max == 3.0f && p->param(kD0 + xDrift).min == -145.0f && p->param(kD0 + xDrift + 4).max == 145.0f &&
+              p->param(kD0 + xDensity).min == -300.0f && p->param(kD0 + xDensity).max == 300.0f,
           "a display parameter's range is not the skin's");
 }
 
@@ -667,8 +777,10 @@ int main()
     displayOrder();
     displayMirrorsState();
     budgetPerBlock();
+    driftWordings();
     restSendsNothing();
     loadAndBusy();
+    loadHolds();
     textsFit();
     overwriteCorrected();
     if (fails) { std::printf("%d failure(s)\n", fails); return 1; }

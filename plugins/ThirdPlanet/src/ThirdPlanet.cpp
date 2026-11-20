@@ -76,8 +76,9 @@ enum Disp : int
     kDPy = kDPx + kPucks,
     kDPlanet = kDPy + kPucks,           // x 5: the layer's planet frame (Sky::planetFrame)
     kDLog = kDPlanet + kPlanets,        // x 3: the log line's serial; its text is the line
-    kDDrift = kDLog + kLogLines,        // x 5: the layer's filter drift, tenths of an octave
-    kDDensity = kDDrift + kPlanets,     // Density's slow drift
+    kDDrift = kDLog + kLogLines,        // x 5: the layer's filter drift, tenths of an octave: as it is while it moves
+                                        // further out, kDriftStill further from 0 while it stands or eases back
+    kDDensity = kDDrift + kPlanets,     // Density's slow drift, in the same way with kDensityStill
     kDStep,         // the step the Pattern page's lane plays, 16 none
     kDExt,          // on the MPC's clock
     kDSource,       // (reserved: the harmony's source, milestone B)
@@ -91,6 +92,9 @@ constexpr int kPuckUnit = 1000;       // a particle's 0..1, in the thousandths t
 constexpr int kPuckMove = 2;          // ... sent when it moved by more than this
 constexpr int kPuckFrames = 2205;     // half of the particles every 50 ms, the halves in turn: 10 Hz each
 constexpr int kPaceFrames = 4410;     // the planets and the drifts: 10 a second at most
+constexpr int kDriftMax = 45, kDriftStill = 100;       // (tenths of an octave: ui.c shows 4.5 at most)
+constexpr int kDensityMax = 100, kDensityStill = 200;
+constexpr int kLoadHoldFrames = 22050;   // after a project load the MPC keeps the display values it loaded this long
 constexpr int kLogSlots = 1024;       // a log line's value: its serial modulo this
 constexpr int kLogWords = tp::sky::kTextMax / 4;
 
@@ -118,8 +122,8 @@ constexpr DispRange dispRange(int k)
          : isPuck(k) ? DispRange{0, kPuckUnit, kPuckUnit / 2}
          : k >= kDPlanet && k < kDLog ? DispRange{0, 23, 0}
          : isLog(k) ? DispRange{0, kLogSlots - 1, 0}
-         : k >= kDDrift && k < kDDensity ? DispRange{-45, 45, 0}
-         : k == kDDensity ? DispRange{-100, 100, 0}
+         : k >= kDDrift && k < kDDensity ? DispRange{-kDriftStill - kDriftMax, kDriftStill + kDriftMax, 0}
+         : k == kDDensity ? DispRange{-kDensityStill - kDensityMax, kDensityStill + kDensityMax, 0}
          : k == kDStep ? DispRange{0, 16, 16}
          : DispRange{0, 1, 0};   // Hold, Lock, EXT, the source
 }
@@ -300,14 +304,20 @@ bool screenText(int k, int v, char* t, size_t n)
         else if (v > EN_NWALK && v <= dispRange(kDProg).hi) std::snprintf(t, n, "LOOP %d/%d", (v - 4) / 8 + 1, (v - 4) % 8 + 1);
         else std::snprintf(t, n, " ");
     }
-    else if (k >= kDDrift && k < kDDensity)   // (ui.c's sound pages, from a tenth of an octave)
-    {
-        if (a >= 1) std::snprintf(t, n, "MOVING %s %s%d.%d OCT", v < 0 ? "DARKER" : "BRIGHTER", v < 0 ? TP_MINUS : "+", a / 10, a % 10);
+    else if (k >= kDDrift && k < kDDensity)   // (ui.c's sound pages, from a tenth of an octave: "MOVING" while it
+    {                                         // goes further out)
+        const bool still = a >= kDriftStill;
+        const int d = still ? a - kDriftStill : a;
+        if (d >= 1)
+            std::snprintf(t, n, "%s%s %s%d.%d OCT", still ? "" : "MOVING ", v < 0 ? "DARKER" : "BRIGHTER", v < 0 ? TP_MINUS : "+",
+                          d / 10, d % 10);
         else std::snprintf(t, n, " ");
     }
     else if (k == kDDensity)   // (ui.c's Sequence page, from 3 of Density's units)
     {
-        if (a >= 3) std::snprintf(t, n, "MOVING %s %s%d", v < 0 ? "SPARSER" : "DENSER", v < 0 ? TP_MINUS : "+", a);
+        const bool still = a > kDensityStill;
+        const int d = still ? a - kDensityStill : a;
+        if (d >= 3) std::snprintf(t, n, "%s%s %s%d", still ? "" : "MOVING ", v < 0 ? "SPARSER" : "DENSER", v < 0 ? TP_MINUS : "+", d);
         else std::snprintf(t, n, " ");
     }
     else
@@ -484,16 +494,28 @@ public:
         pendingLen_ = n > 0 ? (int)n : -1;
         hostKnows_.store(true, std::memory_order_release);
         displayReset_.store(true, std::memory_order_release);   // (the load brought the saved status values)
+        loadHold_.store(true, std::memory_order_release);
         loadPending_.store(true, std::memory_order_release);
     }
 
     void process(mpc::ProcessContext& ctx) override
     {
+        // A project just loaded: the MPC shows the display values it loaded for half a second, then the true ones
+        // all at once (nothing is sent or corrected meanwhile, so a load reads back as it was saved).
+        if (loadHold_.exchange(false, std::memory_order_acq_rel)) hold_ = kLoadHoldFrames;
+        const bool holding = hold_ > 0;
+        if (holding && (hold_ -= ctx.numFrames) <= 0)
+        {
+            hold_ = 0;
+            displayReset_.store(true, std::memory_order_release);   // (what was written over meanwhile goes with it)
+            displayFix_.store(false, std::memory_order_release);
+            for (std::atomic<bool>& f : fixOne_) f.store(false, std::memory_order_release);
+        }
         bool fresh = false;
         if (!lease_.claim(this, fresh))   // another instance owns the engine: silence, and the screen says so
         {
             forgetHeld();   // (what this instance held went with the engine; the owner boots its own)
-            sendBusy();
+            if (!holding) sendBusy();
             return;
         }
         actionSends_ = 0;
@@ -522,7 +544,7 @@ public:
         // A block's notifications, kMaxSends in all: the one-shots' way back to Off (applyParams), then the display,
         // then the controls with what is left, never fewer than kMirrorMin.
         const int left = kMaxSends - actionSends_;
-        mirror(left - sendDisplay(status(), left - kMirrorMin, ctx.numFrames));
+        mirror(left - (holding ? 0 : sendDisplay(status(), left - kMirrorMin, ctx.numFrames)));
         if (chunks_ > kSettleChunks) hostKnows_.store(true, std::memory_order_release);   // (every value sent back by now)
     }
 
@@ -893,10 +915,15 @@ private:
         {
             v[kDPlanet + l] = sky_.planetFrame(l);
             const float d = filterDrift(l);   // (octaves; not a number: none)
-            v[kDDrift + l] = d >= 4.5f ? 45 : d <= -4.5f ? -45 : d == d ? (int)std::lround(d * 10.0f) : 0;
+            const int tenths = d >= 4.5f ? kDriftMax : d <= -4.5f ? -kDriftMax : d == d ? (int)std::lround(d * 10.0f) : 0;
+            const int way = filterHeading(l);
+            const bool out = way != 0 && (d > 0.0f) == (way > 0);   // (ui.c move_state: further out, "MOVING")
+            v[kDDrift + l] = out || tenths == 0 ? tenths : tenths + (tenths > 0 ? kDriftStill : -kDriftStill);
         }
         for (int l = 0; l < kLogLines; ++l) v[kDLog + l] = sky_.logSerial(l) % kLogSlots;
-        v[kDDensity] = densityShift();
+        int dens = densityShift();
+        dens = dens > kDensityMax ? kDensityMax : dens < -kDensityMax ? -kDensityMax : dens;
+        v[kDDensity] = densityHeading() > 0 || dens == 0 ? dens : dens + (dens > 0 ? kDensityStill : -kDensityStill);
         const int lane = knobValue(kKnobLane);   // (ui.c lane_seq: lanes 1 and 3 are Sequence 2's)
         v[kDStep] = playing() ? loopStep(lane == 1 || lane == 3 ? 1 : 0) : 16;
         v[kDExt] = external() ? 1 : 0;
@@ -1067,6 +1094,8 @@ private:
     int sinceSent_[kNumDisplay] = {};        // frames since each was sent, up to kPaceFrames
     int puckClock_ = 0, puckHalf_ = 0;       // frames since a half of the particles went; the half whose turn it is
     int actionSends_ = 0;                    // one-shots sent back to Off in this block
+    std::atomic<bool> loadHold_{false};      // a project loaded: hold the display
+    int hold_ = 0;                           // ... for this many frames more
 
     // the star-chart screen's model, and the log's texts for formatValue()
     long long skyCarry_ = 0;                 // the part of a millisecond not yet given to the Sky, in frames x 1000
