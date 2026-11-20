@@ -178,12 +178,12 @@ def pattern_steps(p):
 
 
 # ---- Parameters by id ----
-# params.json carries no ids (host_sim writes "id": null), and names are not unique ("Next chord" is both the
-# PLAY one-shot and d_next), so the display parameters are found by their fixed order from d_pad on
-# (src/ThirdPlanet.cpp, enum Disp) and each one's name is checked. Controls are looked up by name below d_pad.
+# params.json carries no ids (host_sim writes "id": null), so the display parameters are found by their fixed order
+# from d_pad on (src/ThirdPlanet.cpp, enum Disp) and each one's name is checked. Controls are looked up by name
+# below d_pad.
 DISPLAY = ([("d_pad", "Pad"), ("d_chord", "Chord"), ("d_hold", "Hold status"), ("d_lock", "Lock status"),
             ("d_section", "Section"), ("d_phrase", "Phrase bar"), ("d_evolve", "Evolve chance"),
-            ("d_next", "Next chord"), ("d_next_in", "Next chord in"), ("d_prog", "Progression"),
+            ("d_next", "Next"), ("d_next_in", "Next chord in"), ("d_prog", "Progression"),
             ("d_ring", "Chord ring")]
            + [("d_slot%d" % i, "Slot %d" % i) for i in range(1, 9)]
            + [("d_slotname%d" % i, "Slot chord %d" % i) for i in range(1, 9)]
@@ -193,7 +193,8 @@ DISPLAY = ([("d_pad", "Pad"), ("d_chord", "Chord"), ("d_hold", "Hold status"), (
            + [("d_log%d" % i, "Log line %d" % i) for i in range(1, 4)]
            + [("d_drift%d" % i, "Filter drift %d" % i) for i in range(1, 6)]
            + [("d_density", "Density drift"), ("d_step", "Step playing"), ("d_ext", "Clock"),
-              ("d_source", "Harmony source")])
+              ("d_source", "Harmony source"), ("d_solo", "Solo status"), ("d_log1hot", "Log line 1 hot"),
+              ("d_tempo", "Tempo text")])
 
 
 def parameter_maps(plist):
@@ -331,6 +332,8 @@ def sky_tab(c, d):
     for i in range(3):
         comps.append(text("log %d" % (i + 1), "Value", P(d["d_log%d" % (i + 1)]), L.LOG_LINES[i],
                           style(20, "Regular", CREAM)))
+    # The newest line while it is new (2 s): the plugin sends it here and blanks the cream one, so one shows.
+    comps.append(text("log 1 hot", "Value", P(d["d_log1hot"]), L.LOG_LINES[0], style(20, "Regular", RED)))
     # The right column: the five planets and their names.
     for i, name in enumerate(L.PLANET_NAMES):
         h = P(d["d_planet%d" % (i + 1)])
@@ -355,13 +358,13 @@ def sky_tab(c, d):
         text("title third planet", "Name", "WithName[· THIRD PLANET]/%s" % P(c["Piece"]), (132, hy, 220, hh),
              style(24, "Regular", CREAM)),
         text("piece", "Value", P(c["Piece"]), (372, hy, 210, hh), style(26, "SemiBold", CREAM)),
-        text("tempo", "Value", P(c["Tempo"]), (590, hy, 60, hh), style(26, "SemiBold", CREAM, "right verticallyCentred")),
-        text("clock", "Value", P(d["d_ext"]), (658, hy, 60, hh), style(26, "SemiBold", CREAM)),
-        text("root", "Value", P(c["Root"]), (726, hy, 50, hh), style(26, "SemiBold", CREAM, "right verticallyCentred")),
-        text("mode", "Value", P(c["Mode"]), (784, hy, 140, hh), style(26, "SemiBold", CREAM)),
-        text("hold", "Value", P(d["d_hold"]), (936, hy, 72, hh), style(22, "Bold", RED)),
-        text("lock", "Value", P(d["d_lock"]), (1010, hy, 72, hh), style(22, "Bold", RED)),
-        text("source", "Value", P(d["d_source"]), (1090, hy, 166, hh), style(20, "SemiBold", DIM, "right verticallyCentred")),
+        text("tempo", "Value", P(d["d_tempo"]), (592, hy, 116, hh), style(26, "SemiBold", CREAM)),   # "96 BPM" or "EXT"
+        text("root", "Value", P(c["Root"]), (708, hy, 44, hh), style(26, "SemiBold", CREAM, "right verticallyCentred")),
+        text("mode", "Value", P(c["Mode"]), (760, hy, 136, hh), style(26, "SemiBold", CREAM)),
+        text("hold", "Value", P(d["d_hold"]), (900, hy, 66, hh), style(22, "Bold", RED)),
+        text("lock", "Value", P(d["d_lock"]), (968, hy, 66, hh), style(22, "Bold", RED)),
+        text("solo", "Value", P(d["d_solo"]), (1036, hy, 66, hh), style(22, "Bold", RED)),
+        text("source", "Value", P(d["d_source"]), (1104, hy, 152, hh), style(20, "SemiBold", DIM, "right verticallyCentred")),
     ]
     # Last, the cover: a blank Name label over the orbits, so a finger moves no puck (spike run 4).
     comps.append(text("cover", "Name", "WithName[ ]/%s" % P(d["d_source"]), L.COVER,

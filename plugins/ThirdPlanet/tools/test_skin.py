@@ -160,6 +160,28 @@ class SkinTest(unittest.TestCase):
             if kind == "choice":
                 self.assertIn("Parameter %d" % idx, {e["key"] for e in self.pd["replacementStrings"]}, name)
 
+    def test_header_and_hot_log(self):
+        """R17, R18, R20: the header binds d_tempo (not Tempo or d_ext) and d_solo; the hot log label sits on line 1,
+        in the accent, after the cream one."""
+        by = {c["componentData"]["name"]: c for c in self.sky}
+        handle = lambda n: by[n]["componentData"]["data"]["handleName"]
+        self.assertEqual(handle("tempo"), "Parameter %d" % self.disp["d_tempo"])
+        self.assertEqual(handle("solo"), "Parameter %d" % self.disp["d_solo"])
+        used = {c["componentData"]["data"].get("handleName") for c in self.sky}
+        self.assertNotIn("Parameter %d" % self.disp["d_ext"], used)
+        self.assertNotIn("Parameter %d" % self.controls["Tempo"], used)
+        names = [c["componentData"]["name"] for c in self.sky]
+        self.assertGreater(names.index("log 1 hot"), names.index("log 1"))
+        self.assertEqual(rect(by["log 1 hot"]), rect(by["log 1"]))
+        self.assertEqual(handle("log 1 hot"), "Parameter %d" % self.disp["d_log1hot"])
+        self.assertEqual(by["log 1 hot"]["componentData"]["data"]["textStyle"]["colour"], L.argb(L.ACCENT))
+        self.assertEqual(by["log 1"]["componentData"]["data"]["textStyle"]["colour"], L.argb(L.CREAM))
+
+    def test_names_unique(self):
+        """R19: no two parameters share a name (d_next is "Next", the one-shot "Next chord")."""
+        names = [p["name"] for p in self.plist]
+        self.assertEqual(len(names), len(set(names)))
+
     def test_no_one_shot_on_a_qlink(self):
         """The one-shots (and the PLAY page's Next chord, 115, not d_next) stay off the knobs."""
         play = self.tabs["PLAY"]["componentDefinition"]["componentsData"]

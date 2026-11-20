@@ -58,7 +58,7 @@ constexpr int kDispHold = kDispPad + 2;      // Hold
 constexpr int kDispLock = kDispPad + 3;      // Lock
 // All of them by display index k (parameter kDispPad + k): the status line's four, then the star-chart screen's
 // (docs/superpowers/specs/2026-11-20-third-planet-screen-design.md, section 10). tools/gen_skin.py finds them by id
-// (d_section .. d_source), so their order is free to grow at the end only.
+// (d_section .. d_tempo), in this order, so it is free to grow at the end only.
 constexpr int kSlots = EN_NPROG, kPucks = tp::sky::kPucks, kPlanets = tp::sky::kPlanets, kLogLines = tp::sky::kLogLines;
 enum Disp : int
 {
@@ -82,6 +82,9 @@ enum Disp : int
     kDStep,         // the step the Pattern page's lane plays, 16 none
     kDExt,          // on the MPC's clock
     kDSource,       // (reserved: the harmony's source, milestone B)
+    kDSolo,         // a layer is soloed
+    kDLog1Hot,      // the newest log line while it is new (kLogHotFrames): its serial, -1 none; meanwhile kDLog is -1
+    kDTempo,        // the header's tempo: the BPM, or -1 on the MPC's clock (EXT)
     kNumDisplay
 };
 static_assert(kDispChord == kDispPad + kDChord && kDispHold == kDispPad + kDHold && kDispLock == kDispPad + kDLock,
@@ -97,6 +100,8 @@ constexpr int kDensityMax = 100, kDensityStill = 200;
 constexpr int kLoadHoldFrames = 22050;   // after a project load the MPC keeps the display values it loaded this long
 constexpr int kLogSlots = 1024;       // a log line's value: its serial modulo this
 constexpr int kLogWords = tp::sky::kTextMax / 4;
+constexpr int kLogHotFrames = 88200;  // the newest log line is shown in the accent this long (2 s of audio)
+constexpr int kTempoMax = 300;        // (above any BPM the FM-1's Tempo reaches)
 
 constexpr bool isPuck(int k) { return k >= kDPx && k < kDPlanet; }
 constexpr bool isPaced(int k) { return (k >= kDPlanet && k < kDLog) || (k >= kDDrift && k <= kDDensity); }
@@ -121,11 +126,13 @@ constexpr DispRange dispRange(int k)
          : k >= kDSlot && k < kDSlotName ? DispRange{0, 3, 0}
          : isPuck(k) ? DispRange{0, kPuckUnit, kPuckUnit / 2}
          : k >= kDPlanet && k < kDLog ? DispRange{0, 23, 0}
-         : isLog(k) ? DispRange{0, kLogSlots - 1, 0}
+         : isLog(k) ? DispRange{-1, kLogSlots - 1, 0}   // (-1: blank, line 1 while it is hot)
+         : k == kDLog1Hot ? DispRange{-1, kLogSlots - 1, -1}
+         : k == kDTempo ? DispRange{-1, kTempoMax, 0}
          : k >= kDDrift && k < kDDensity ? DispRange{-kDriftStill - kDriftMax, kDriftStill + kDriftMax, 0}
          : k == kDDensity ? DispRange{-kDensityStill - kDensityMax, kDensityStill + kDensityMax, 0}
          : k == kDStep ? DispRange{0, 16, 16}
-         : DispRange{0, 1, 0};   // Hold, Lock, EXT, the source
+         : DispRange{0, 1, 0};   // Hold, Lock, EXT, the source, Solo
 }
 const char* const kHoldText[] = {" ", "HOLD"};
 const char* const kLockText[] = {" ", "LOCK"};
@@ -134,6 +141,7 @@ const char* const kSectionText[] = {" ", "EMERGE", "FLOW", "SOLO", "BRIDGE"};   
 const char* const kWalkText[] = {"HOME", "WANDER", "FREE"};                     // (EN_WALK_NAME)
 const char* const kExtText[] = {" ", "EXT"};
 const char* const kSourceText[] = {" ", "PERFORMER"};
+const char* const kSoloText[] = {" ", "SOLO"};
 #define TP_MINUS "\xE2\x88\x92"   // U+2212, as the log writes a fall
 #define TP_DOT "\xC2\xB7"         // U+00B7
 constexpr int kFixFrames = 4410;   // a status value the MPC wrote over is corrected at most every 100 ms
@@ -291,6 +299,12 @@ bool screenText(int k, int v, char* t, size_t n)
         if (v > 0) std::snprintf(t, n, "EVOLVE %d%%", v);
         else std::snprintf(t, n, " ");
     }
+    else if (k == kDTempo)
+    {
+        if (v < 0) std::snprintf(t, n, "EXT");
+        else if (v > 0) std::snprintf(t, n, "%d BPM", v);
+        else std::snprintf(t, n, " ");
+    }
     else if (k == kDNextIn)   // (app_api.h barsToNextChord)
     {
         if (v == -2) std::snprintf(t, n, "ON HOLD");
@@ -340,7 +354,7 @@ mpc::Param makeDisplay(int k)
         case kDSection: return mpc::choiceParam("d_section", "Section", std::vector<std::string>(kSectionText, kSectionText + 5), 0);
         case kDPhrase: return mpc::intParam("d_phrase", "Phrase bar", r.lo, r.hi, r.rest, "");
         case kDEvolve: return mpc::intParam("d_evolve", "Evolve chance", r.lo, r.hi, r.rest, "");
-        case kDNext: return mpc::intParam("d_next", "Next chord", r.lo, r.hi, r.rest, "");
+        case kDNext: return mpc::intParam("d_next", "Next", r.lo, r.hi, r.rest, "");   // (not "Next chord": the one-shot's)
         case kDNextIn: return mpc::intParam("d_next_in", "Next chord in", r.lo, r.hi, r.rest, "");
         case kDProg: return mpc::intParam("d_prog", "Progression", r.lo, r.hi, r.rest, "");
         case kDRing: return mpc::intParam("d_ring", "Chord ring", r.lo, r.hi, r.rest, "");
@@ -348,6 +362,9 @@ mpc::Param makeDisplay(int k)
         case kDStep: return mpc::intParam("d_step", "Step playing", r.lo, r.hi, r.rest, "");
         case kDExt: return mpc::choiceParam("d_ext", "Clock", std::vector<std::string>(kExtText, kExtText + 2), 0);
         case kDSource: return mpc::choiceParam("d_source", "Harmony source", std::vector<std::string>(kSourceText, kSourceText + 2), 0);
+        case kDSolo: return mpc::choiceParam("d_solo", "Solo status", std::vector<std::string>(kSoloText, kSoloText + 2), 0);
+        case kDLog1Hot: return mpc::intParam("d_log1hot", "Log line 1 hot", r.lo, r.hi, r.rest, "");
+        case kDTempo: return mpc::intParam("d_tempo", "Tempo text", r.lo, r.hi, r.rest, "");
         default: break;
     }
     if (k < kDSlotName) return numbered("d_slot", "Slot", kDSlot);
@@ -441,9 +458,9 @@ public:
             const DispRange r = dispRange(k);
             int v = std::isfinite(plainValue) ? (int)std::lround(plainValue) : r.rest;
             v = v < r.lo ? r.lo : v > r.hi ? r.hi : v;
-            if (isLog(k))
+            if (isLog(k) || k == kDLog1Hot)
             {
-                out = logLine(v);
+                out = v < 0 ? std::string(" ") : logLine(v);
                 return true;
             }
             char t[tp::sky::kTextMax];
@@ -549,6 +566,7 @@ public:
     }
 
     const tp::sky::Sky& sky() const { return sky_; }   // (tests: the screen's model, as the audio thread left it)
+    bool logHot() const { return logHot_ > 0; }          // (tests: the newest log line is in the accent)
 
 private:
     static mpc::PluginInfo makeInfo()
@@ -846,11 +864,13 @@ private:
         const int ms = (int)(skyCarry_ / 44100);
         skyCarry_ %= 44100;
         sky_.advance(in, ms);
+        logHot_ = logHot_ > frames ? logHot_ - frames : 0;
         for (int l = 0; l < kLogLines; ++l)   // a line's new text, where formatValue() finds it, before its serial is sent
             if (sky_.logSerial(l) != logSeen_[l])
             {
                 logSeen_[l] = sky_.logSerial(l);
                 publishLog(logSeen_[l] % kLogSlots, sky_.logText(l));
+                if (l == 0) logHot_ = sky_.logText(0)[0] != 0 ? kLogHotFrames : 0;   // (a new event, or the lines cleared)
             }
     }
 
@@ -921,6 +941,9 @@ private:
             v[kDDrift + l] = out || tenths == 0 ? tenths : tenths + (tenths > 0 ? kDriftStill : -kDriftStill);
         }
         for (int l = 0; l < kLogLines; ++l) v[kDLog + l] = sky_.logSerial(l) % kLogSlots;
+        // (the newest line while it is new: on the accent's label, and the cream one blank, so one of them shows)
+        v[kDLog1Hot] = logHot_ > 0 ? v[kDLog] : -1;
+        if (logHot_ > 0) v[kDLog] = -1;
         int dens = densityShift();
         dens = dens > kDensityMax ? kDensityMax : dens < -kDensityMax ? -kDensityMax : dens;
         v[kDDensity] = densityHeading() > 0 || dens == 0 ? dens : dens + (dens > 0 ? kDensityStill : -kDensityStill);
@@ -928,6 +951,8 @@ private:
         v[kDStep] = playing() ? loopStep(lane == 1 || lane == 3 ? 1 : 0) : 16;
         v[kDExt] = external() ? 1 : 0;
         v[kDSource] = 0;
+        v[kDSolo] = soloed() ? 1 : 0;
+        v[kDTempo] = external() ? -1 : par(P_TEMPO);
         for (int k = 0; k < kNumDisplay; ++k)
         {
             const DispRange r = dispRange(k);
@@ -1100,6 +1125,7 @@ private:
     // the star-chart screen's model, and the log's texts for formatValue()
     long long skyCarry_ = 0;                 // the part of a millisecond not yet given to the Sky, in frames x 1000
     int logSeen_[kLogLines] = {};            // each line's serial as published
+    int logHot_ = 0;                         // frames the newest line stays hot (kDLog1Hot)
     std::atomic<uint32_t> logSeq_{0};
     std::atomic<uint32_t> logText_[kLogSlots][kLogWords];
     int idxSync_ = 0, idxKeyMode_ = 0, idxPadBase_ = 0;

@@ -3296,6 +3296,43 @@
               "version": 2,
               "componentData": {
                 "version": 1,
+                "name": "log 1 hot",
+                "type": "Label",
+                "data": {
+                  "version": 1,
+                  "textStyle": {
+                    "version": 1,
+                    "font": {
+                      "version": 1,
+                      "name": "Titillium Web",
+                      "style": "Regular",
+                      "height": 20.0
+                    },
+                    "colour": "ffe2553f",
+                    "justification": "left verticallyCentred",
+                    "case": "Original"
+                  },
+                  "type": "Value",
+                  "handleName": "Parameter 234"
+                }
+              },
+              "handle remapping": {
+                "version": 1,
+                "map": []
+              },
+              "bounds": {
+                "version": 1,
+                "acceptsHWFocus": "No",
+                "showWhenDataModelInvalid": "Show",
+                "whenVisible": "Always",
+                "boundsType": "Absolute",
+                "bounds": "24 404 380 32"
+              }
+            },
+            {
+              "version": 2,
+              "componentData": {
+                "version": 1,
                 "name": "planet 1",
                 "type": "Image",
                 "data": {
@@ -4801,48 +4838,11 @@
                       "height": 26.0
                     },
                     "colour": "ffefe6d2",
-                    "justification": "right verticallyCentred",
-                    "case": "Original"
-                  },
-                  "type": "Value",
-                  "handleName": "Parameter 8"
-                }
-              },
-              "handle remapping": {
-                "version": 1,
-                "map": []
-              },
-              "bounds": {
-                "version": 1,
-                "acceptsHWFocus": "No",
-                "showWhenDataModelInvalid": "Show",
-                "whenVisible": "Always",
-                "boundsType": "Absolute",
-                "bounds": "590 8 60 40"
-              }
-            },
-            {
-              "version": 2,
-              "componentData": {
-                "version": 1,
-                "name": "clock",
-                "type": "Label",
-                "data": {
-                  "version": 1,
-                  "textStyle": {
-                    "version": 1,
-                    "font": {
-                      "version": 1,
-                      "name": "Titillium Web",
-                      "style": "SemiBold",
-                      "height": 26.0
-                    },
-                    "colour": "ffefe6d2",
                     "justification": "left verticallyCentred",
                     "case": "Original"
                   },
                   "type": "Value",
-                  "handleName": "Parameter 231"
+                  "handleName": "Parameter 235"
                 }
               },
               "handle remapping": {
@@ -4855,7 +4855,7 @@
                 "showWhenDataModelInvalid": "Show",
                 "whenVisible": "Always",
                 "boundsType": "Absolute",
-                "bounds": "658 8 60 40"
+                "bounds": "592 8 116 40"
               }
             },
             {
@@ -4892,7 +4892,7 @@
                 "showWhenDataModelInvalid": "Show",
                 "whenVisible": "Always",
                 "boundsType": "Absolute",
-                "bounds": "726 8 50 40"
+                "bounds": "708 8 44 40"
               }
             },
             {
@@ -4929,7 +4929,7 @@
                 "showWhenDataModelInvalid": "Show",
                 "whenVisible": "Always",
                 "boundsType": "Absolute",
-                "bounds": "784 8 140 40"
+                "bounds": "760 8 136 40"
               }
             },
             {
@@ -4966,7 +4966,7 @@
                 "showWhenDataModelInvalid": "Show",
                 "whenVisible": "Always",
                 "boundsType": "Absolute",
-                "bounds": "936 8 72 40"
+                "bounds": "900 8 66 40"
               }
             },
             {
@@ -5003,7 +5003,44 @@
                 "showWhenDataModelInvalid": "Show",
                 "whenVisible": "Always",
                 "boundsType": "Absolute",
-                "bounds": "1010 8 72 40"
+                "bounds": "968 8 66 40"
+              }
+            },
+            {
+              "version": 2,
+              "componentData": {
+                "version": 1,
+                "name": "solo",
+                "type": "Label",
+                "data": {
+                  "version": 1,
+                  "textStyle": {
+                    "version": 1,
+                    "font": {
+                      "version": 1,
+                      "name": "Titillium Web",
+                      "style": "Bold",
+                      "height": 22.0
+                    },
+                    "colour": "ffe2553f",
+                    "justification": "left verticallyCentred",
+                    "case": "Original"
+                  },
+                  "type": "Value",
+                  "handleName": "Parameter 233"
+                }
+              },
+              "handle remapping": {
+                "version": 1,
+                "map": []
+              },
+              "bounds": {
+                "version": 1,
+                "acceptsHWFocus": "No",
+                "showWhenDataModelInvalid": "Show",
+                "whenVisible": "Always",
+                "boundsType": "Absolute",
+                "bounds": "1036 8 66 40"
               }
             },
             {
@@ -5040,7 +5077,7 @@
                 "showWhenDataModelInvalid": "Show",
                 "whenVisible": "Always",
                 "boundsType": "Absolute",
-                "bounds": "1090 8 166 40"
+                "bounds": "1104 8 152 40"
               }
             },
             {

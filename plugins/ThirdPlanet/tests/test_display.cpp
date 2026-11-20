@@ -5,7 +5,7 @@
 //   2. the plugin sends the Pad, the chord, Hold and Lock as they change, from the pads and the switches;
 //   3. a value the MPC writes over a status value is corrected on the next block;
 //   4. a second instance shows that another one plays, and nothing else.
-// And the star-chart screen's display parameters (d_section .. d_source) with their send scheduler:
+// And the star-chart screen's display parameters (d_section .. d_tempo) with their send scheduler:
 //   5. each one follows the state it shows (the app's readouts, the Sky model), within its pace;
 //   6. no block notifies the MPC of more than 24 parameters, and the controls still come back within a second;
 //   7. at rest nothing is sent; a project load logs nothing; a second instance sends only its message;
@@ -62,10 +62,13 @@ void runPlugin(ThirdPlanet& p, long frames, const std::vector<Ev>& evs = {})
 }
 
 // A host that notes which parameters the plugin notifies it of (audioMasterAutomate), block by block.
+// It answers audioMasterGetTime with hostTime: no transport unless a test sets one (the MPC stopped).
 std::vector<int> notified;
+VstTimeInfo hostTime;
 VstIntPtr hostCb(AEffect*, VstInt32 opcode, VstInt32 index, VstIntPtr, void*, float)
 {
     if (opcode == audioMasterAutomate) notified.push_back(index);
+    if (opcode == audioMasterGetTime) return (VstIntPtr)&hostTime;
     return 0;
 }
 AEffect fakeFx;
@@ -208,12 +211,12 @@ std::vector<std::string> displayIds()
     };
     many("d_slot", 8), many("d_slotname", 8), many("d_px", 8), many("d_py", 8), many("d_planet", 5), many("d_log", 3),
         many("d_drift", 5);
-    ids.insert(ids.end(), {"d_density", "d_step", "d_ext", "d_source"});
+    ids.insert(ids.end(), {"d_density", "d_step", "d_ext", "d_source", "d_solo", "d_log1hot", "d_tempo"});
     return ids;
 }
 enum { xPad, xChord, xHold, xLock, xSection, xPhrase, xEvolve, xNext, xNextIn, xProg, xRing, xSlot, xSlotName = xSlot + 8,
        xPx = xSlotName + 8, xPy = xPx + 8, xPlanet = xPy + 8, xLog = xPlanet + 5, xDrift = xLog + 3, xDensity = xDrift + 5,
-       xStep, xExt, xSource, xCount };
+       xStep, xExt, xSource, xSolo, xLog1Hot, xTempo, xCount };
 constexpr int kD0 = tp::kNumControls;   // the first display parameter's index
 
 int did(ThirdPlanet& p, const std::string& id)
@@ -270,11 +273,15 @@ void expected(ThirdPlanet& p, double* w)
         w[xDrift + l] = out || tenths == 0 ? tenths : tenths + (tenths > 0 ? 100 : -100);   // (not moving out: 100 further)
     }
     for (int n = 0; n < 3; ++n) w[xLog + n] = sky.logSerial(n) % 1024;
+    w[xLog1Hot] = p.logHot() ? w[xLog] : -1;   // (the newest line while new: the accent's label, the cream one blank)
+    if (p.logHot()) w[xLog] = -1;
     w[xDensity] = densityHeading() > 0 || densityShift() == 0 ? densityShift() : densityShift() + (densityShift() > 0 ? 200 : -200);
     const int lane = knobValue(kKnobLane);
     w[xStep] = playing() ? loopStep(lane == 1 || lane == 3 ? 1 : 0) : 16;
     w[xExt] = external();
     w[xSource] = 0;
+    w[xSolo] = soloed();
+    w[xTempo] = external() ? -1 : par(P_TEMPO);
 }
 bool xIsPuck(int k) { return k >= xPx && k < xPlanet; }
 bool xIsPaced(int k) { return (k >= xPlanet && k < xLog) || (k >= xDrift && k <= xDensity); }   // (10 a second at most)
@@ -379,7 +386,7 @@ void displayMirrorsState()
     runBlocks(*p, 30 * 44100L, bs, [&](long done, int n) {
         lag.block(*p, n, done > 44100);
         if (at(done, 5.0)) p->set(idx("nudge_seq"), 1.0f);
-        if (at(done, 5.5)) nudgeLine = text(*p, kD0 + xLog);
+        if (at(done, 5.5)) nudgeLine = text(*p, kD0 + xLog1Hot);   // (new: on the accent's label)
         if (at(done, 9.0)) p->set(idx("hold"), 1.0f);
         if (at(done, 11.0))
         {
@@ -584,18 +591,20 @@ void loadAndBusy()
     runBlocks(*p, 22050, 128);
     p->set(idx("nudge_lead"), 1.0f);
     runBlocks(*p, 22050, 128);
-    for (int l = 0; l < 3; ++l)
+    CHECK(text(*p, kD0 + xLog1Hot) != " " && text(*p, kD0 + xLog) == " ", "before the load, the newest line is not hot");
+    for (int l = 1; l < 3; ++l)
         CHECK(text(*p, kD0 + xLog + l) != " ", "before the load, log line %d is empty", l + 1);
     const std::vector<uint8_t> saved = p->internalSaveState();
     CHECK(p->internalLoadState(saved.data(), saved.size()), "the project did not load");
     std::vector<std::string> logged;
     runBlocks(*p, 44100, 128, [&](long, int) {
         for (int i : notified)
-            if (i >= kD0 + xLog && i < kD0 + xLog + 3) logged.push_back(text(*p, i));
+            if ((i >= kD0 + xLog && i < kD0 + xLog + 3) || i == kD0 + xLog1Hot) logged.push_back(text(*p, i));
     });
     CHECK(tp::app::held() && tp::app::locked() && tp::app::muted(1) && tp::app::soloed(2), "the load did not restore the switches");
     for (int l = 0; l < 3; ++l)
         CHECK(text(*p, kD0 + xLog + l) == " ", "after the load, log line %d shows '%s'", l + 1, text(*p, kD0 + xLog + l).c_str());
+    CHECK(text(*p, kD0 + xLog1Hot) == " ", "after the load, the hot line shows '%s'", text(*p, kD0 + xLog1Hot).c_str());
     CHECK(!logged.empty(), "the load did not send the cleared log lines");
     for (const std::string& t : logged)
         CHECK(t == " ", "the load logged '%s'", t.c_str());
@@ -706,6 +715,7 @@ void textsFit()
             if (act % 24 == 0) p->set(idx("piece"), (float)((act / 24) % EN_NPIECES));
         }
         for (int l = 0; l < 3; ++l) check(kD0 + xLog + l, p->get(kD0 + xLog + l));
+        check(kD0 + xLog1Hot, p->get(kD0 + xLog1Hot));
     });
     for (int k = 0; k < xCount; ++k)
     {
@@ -738,6 +748,11 @@ void textsFit()
     shows(xDensity, -7, "MOVING SPARSER \xE2\x88\x92" "7"), shows(xDensity, 2, " "), shows(xDensity, 202, " ");
     shows(xDensity, 212, "DENSER +12"), shows(xDensity, -207, "SPARSER \xE2\x88\x92" "7"), shows(xDensity, -300, "SPARSER \xE2\x88\x92" "100");
     shows(xExt, 0, " "), shows(xExt, 1, "EXT"), shows(xSource, 0, " "), shows(xSource, 1, "PERFORMER");
+    shows(xSolo, 0, " "), shows(xSolo, 1, "SOLO"), shows(xLog, -1, " "), shows(xLog1Hot, -1, " ");
+    shows(xTempo, -1, "EXT"), shows(xTempo, 0, " "), shows(xTempo, 96, "96 BPM"), shows(xTempo, 300, "300 BPM");
+    CHECK(p->param(kD0 + xNext).name == "Next", "d_next is named '%s'", p->param(kD0 + xNext).name.c_str());
+    for (int i = 0; i < kD0; ++i)
+        CHECK(p->param(i).name != "Next", "control %s is also named Next", p->param(i).id.c_str());
     const mpc::Param& in = p->param(kD0 + xNextIn);
     CHECK(in.min == -2.0f && in.max == 64.0f, "d_next_in runs %g..%g", (double)in.min, (double)in.max);
     CHECK(p->param(kD0 + xProg).max == 67.0f && p->param(kD0 + xRing).max == 99.0f && p->param(kD0 + xLog).max == 1023.0f &&
@@ -767,6 +782,92 @@ void overwriteCorrected()
     CHECK(most <= 24, "the corrections took %d notifications in one block", most);
 }
 
+
+// log_hot: the newest log line shows on the accent's label (d_log1hot) for 2 s of audio, the cream one (d_log1)
+// blank meanwhile; then they swap. Never are both showing text.
+void logHot()
+{
+    for (int bs : {32, 128, 512})
+    {
+        auto p = make();
+        runBlocks(*p, 3 * 44100L, bs);
+        long both = 0, nudgedAt = -1, sawHot = 0, sawCold = 0;
+        std::string line;
+        runBlocks(*p, 9 * 44100L, bs, [&](long done, int) {
+            const std::string cold = text(*p, kD0 + xLog), hot = text(*p, kD0 + xLog1Hot);
+            both += cold != " " && hot != " ";
+            if (nudgedAt < 0 && done >= 2 * 44100L)
+            {
+                p->set(idx("nudge_drone"), 1.0f);   // (applied, and logged, in the next block)
+                nudgedAt = done;
+                return;
+            }
+            if (nudgedAt < 0) return;
+            const long age = done - nudgedAt;   // (the line is at most a block younger than this)
+            if (age > 2 * bs && age <= 88200 - 2 * bs)
+            {
+                sawHot += hot.find("Nudge Drone") != std::string::npos && cold == " ";
+                if (line.empty()) line = hot;
+            }
+            if (age > 88200 + 3 * bs && age < 3 * 44100L)
+                sawCold += cold == line && hot == " ";
+        });
+        const long hotBlocks = (88200 - 4 * bs) / bs, coldBlocks = (44100 - 3 * bs) / bs - 1;
+        CHECK(both == 0, "blocks of %d: %ld blocks showed both log 1 labels", bs, both);
+        CHECK(sawHot >= hotBlocks, "blocks of %d: the nudge's line was hot in %ld blocks of the 2 s (%ld expected)", bs, sawHot, hotBlocks);
+        CHECK(sawCold >= coldBlocks, "blocks of %d: after 2 s the line '%s' was cream in only %ld blocks", bs, line.c_str(), sawCold);
+    }
+}
+
+// solo_status: d_solo shows SOLO while a layer is soloed, from the switch and from the app.
+void soloStatus()
+{
+    auto p = make();
+    runBlocks(*p, 44100, 128);
+    CHECK(text(*p, kD0 + xSolo) == " ", "unsoloed, the header's Solo shows '%s'", text(*p, kD0 + xSolo).c_str());
+    p->set(idx("solo_lead"), 1.0f);
+    runBlocks(*p, 4 * 128, 128);
+    CHECK(tp::app::soloed() && text(*p, kD0 + xSolo) == "SOLO", "Lead soloed, the header's Solo shows '%s'", text(*p, kD0 + xSolo).c_str());
+    p->set(idx("solo_atmos"), 1.0f);
+    p->set(idx("solo_lead"), 0.0f);
+    runBlocks(*p, 4 * 128, 128);
+    CHECK(text(*p, kD0 + xSolo) == "SOLO", "Atmos soloed, the header's Solo shows '%s'", text(*p, kD0 + xSolo).c_str());
+    p->set(idx("solo_atmos"), 0.0f);
+    runBlocks(*p, 4 * 128, 128);
+    CHECK(!tp::app::soloed() && text(*p, kD0 + xSolo) == " ", "unsoloed again, the header's Solo shows '%s'", text(*p, kD0 + xSolo).c_str());
+}
+
+// tempo_text: the header's tempo is the Tempo knob's BPM, or EXT while the piece runs on the MPC's clock (Sync).
+void tempoText()
+{
+    auto p = make();
+    std::memset(&hostTime, 0, sizeof hostTime);
+    hostTime.sampleRate = 44100, hostTime.tempo = 120, hostTime.flags = kVstTempoValid | kVstPpqPosValid;
+    auto run = [&](double secs) {
+        runBlocks(*p, (long)(secs * 44100), 128, [&](long, int n) {
+            if (hostTime.flags & kVstTransportPlaying) hostTime.ppqPos += n * hostTime.tempo / 60.0 / 44100.0;
+        });
+    };
+    run(1.0);
+    char want[32];
+    std::snprintf(want, sizeof want, "%d BPM", tp::app::par(P_TEMPO));
+    CHECK(text(*p, kD0 + xTempo) == want, "own clock: the tempo shows '%s', expected '%s'", text(*p, kD0 + xTempo).c_str(), want);
+    p->setNormalised(idx("tempo"), 1.0f);
+    run(0.2);
+    std::snprintf(want, sizeof want, "%d BPM", tp::app::par(P_TEMPO));
+    CHECK(text(*p, kD0 + xTempo) == want, "Tempo up: the tempo shows '%s', expected '%s'", text(*p, kD0 + xTempo).c_str(), want);
+    p->set(idx("sync"), 1.0f);
+    hostTime.flags |= kVstTransportPlaying;
+    run(2.0);
+    CHECK(tp::app::external() && text(*p, kD0 + xTempo) == "EXT", "Sync on, the MPC plays: the tempo shows '%s' (external %d)",
+          text(*p, kD0 + xTempo).c_str(), (int)tp::app::external());
+    p->set(idx("sync"), 0.0f);
+    run(2.0);
+    CHECK(!tp::app::external() && text(*p, kD0 + xTempo) == want, "Sync off: the tempo shows '%s', expected '%s'",
+          text(*p, kD0 + xTempo).c_str(), want);
+    std::memset(&hostTime, 0, sizeof hostTime);
+}
+
 } // namespace
 
 int main()
@@ -783,6 +884,9 @@ int main()
     loadHolds();
     textsFit();
     overwriteCorrected();
+    logHot();
+    soloStatus();
+    tempoText();
     if (fails) { std::printf("%d failure(s)\n", fails); return 1; }
     std::printf("test_display: all passed\n");
     return 0;
