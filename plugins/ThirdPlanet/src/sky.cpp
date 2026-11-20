@@ -145,6 +145,65 @@ int deltaText(int d, char* b)
     return k;
 }
 
+// How far a value moved for its parameter: |to - from| over its range (ruling R11).
+float relChange(const Event& e)
+{
+    const int d = (int)e.to - (int)e.from, a = d < 0 ? -d : d;
+    int range = 65535;
+    if (e.param >= 0 && e.param < P_NPARAMS)
+    {
+        const en_param_t* p = en_param_info(e.param);
+        range = p->hi - p->lo;
+    }
+    return (float)a / (float)(range > 0 ? range : 1);
+}
+
+constexpr int kBurstMax = 16;   // a hand action's values (evDiff gives 8 at most); more stand as lines of their own
+
+// The log's lines, oldest first, as line(event) calls. Ruling R11: a hand nudge or shake (kWhoYou kEvNudge, kEvShake)
+// and the kWhoYou kEvParam / kEvVoice lines of its layer that follow it are one burst, ordered so the action is the
+// newest line and the largest moves (relative to each parameter's range; of equals, the earlier) are just below it.
+// A shake's action line is its kEvVoice ("Shake Lead FM Reed") when it has one. Everything else, Evolve's values
+// included, is one line per event, in order.
+template <class F>
+void forEachLine(const Event* ev, int n, F&& line)
+{
+    using namespace tp::app;
+    for (int i = 0; i < n;)
+    {
+        const Event& a = ev[i];
+        if (a.who != kWhoYou || (a.what != kEvNudge && a.what != kEvShake))
+        {
+            line(a);
+            i++;
+            continue;
+        }
+        int idx[kBurstMax], m = 0, voice = -1, j = i + 1;
+        for (; j < n && m < kBurstMax; j++)
+        {
+            const Event& f = ev[j];
+            if (f.who != kWhoYou || (f.what != kEvParam && f.what != kEvVoice) || f.layer != a.layer) break;
+            if (f.what == kEvVoice && a.what == kEvShake && voice < 0)
+                voice = j;
+            else
+                idx[m++] = j;
+        }
+        for (int x = 1; x < m; x++)   // largest move first; stable, so equals keep their order
+        {
+            const int v = idx[x];
+            const float r = relChange(ev[v]);
+            int y = x;
+            for (; y > 0 && relChange(ev[idx[y - 1]]) < r; y--)
+                idx[y] = idx[y - 1];
+            idx[y] = v;
+        }
+        for (int x = m - 1; x >= 0; x--)
+            line(ev[idx[x]]);
+        line(voice >= 0 ? ev[voice] : a);
+        i = j;
+    }
+}
+
 } // namespace
 
 const char* shortName(int param) { return param >= 0 && param < P_NPARAMS ? kShort[param] : ""; }
@@ -342,8 +401,13 @@ void Sky::advance(const SkyInput& in, int ms)
         default: break;
         }
     }
-    for (int i = n > kLogLines ? n - kLogLines : 0; i < n; i++)
-        push(in.events[i], in.piece);
+    // the log: count the lines, then push only the newest kLogLines (a burst of 64 formats 3)
+    int total = 0;
+    forEachLine(in.events, n, [&](const Event&) { total++; });
+    int k = 0;
+    forEachLine(in.events, n, [&](const Event& e) {
+        if (k++ >= total - kLogLines) push(e, in.piece);
+    });
 }
 
 Puck Sky::puck(int i) const

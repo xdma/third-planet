@@ -12,11 +12,13 @@
 //      Motion log nothing; 100 events leave the newest 64, in order;
 //   7. the Sky model (sky.h): particles launch, move and park as ui.c's orbits do; planet frames follow activity,
 //      mutes and nudge flashes; the log keeps the newest three lines; every event formats within 31 bytes of valid
-//      UTF-8, the realistic ones whole; reset() clears it all.
+//      UTF-8, the realistic ones whole; reset() clears it all; a hand nudge's or shake's burst shows the action
+//      newest and its two largest moves below it (ruling R11).
 //   c++ -std=c++17 -O2 -I plugins/ThirdPlanet/src -I deps/mpc-plugin-sdk/framework \
 //       plugins/ThirdPlanet/tests/test_screen.cpp plugins/ThirdPlanet/src/sky.cpp plugins/ThirdPlanet/src/app_unit.cpp \
 //       plugins/ThirdPlanet/src/engine_unit.cpp plugins/ThirdPlanet/src/power.cpp \
 //       -o plugins/ThirdPlanet/build/tests/test_screen
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -1232,6 +1234,76 @@ void every_format_fits()
     CHECK(std::strcmp(tp::sky::shortName(-1), "") == 0 && std::strcmp(tp::sky::shortName(P_NPARAMS), "") == 0, "short name range");
 }
 
+// Ruling R11: a hand nudge's or shake's burst shows the action newest, its two largest moves (for their ranges) below.
+float relMove(const Event& e)
+{
+    const en_param_t* p = en_param_info(e.param);
+    return (float)std::abs((int)e.to - (int)e.from) / (float)(p->hi - p->lo);
+}
+void hand_burst_order()
+{
+    SkyInput in = skyIn();
+    // a shake of the Lead: the voice line is the action; Attack +30 and Vibrato -10 the largest
+    {
+        Sky s;
+        feed(s, in, {ev(kWhoYou, kEvShake, 2), ev(kWhoYou, kEvParam, 2, P_LTONE, 50, 52), ev(kWhoYou, kEvVoice, 2, P_LVOICE, 0, 6),
+                     ev(kWhoYou, kEvParam, 2, P_LATT, 10, 40), ev(kWhoYou, kEvParam, 2, P_VIB, 40, 30),
+                     ev(kWhoYou, kEvParam, 2, P_GLIDE, 25, 26)});
+        CHECK(std::string(s.logText(0)) == "You › Shake Lead FM Reed", "shake line 0: %s", s.logText(0));
+        CHECK(std::string(s.logText(1)) == "You › Lead Attack +30", "shake line 1: %s", s.logText(1));
+        CHECK(std::string(s.logText(2)) == "You › Lead Vibrato −10", "shake line 2: %s", s.logText(2));
+    }
+    // a nudge of the Sequence: equals keep their order; a move counts for its range (Drift 2 of 6 over Cutoff 30 of 100)
+    {
+        Sky s;
+        feed(s, in, {ev(kWhoYou, kEvNudge, 1), ev(kWhoYou, kEvParam, 1, P_CUTOFF, 45, 50), ev(kWhoYou, kEvParam, 1, P_DECAY, 35, 30),
+                     ev(kWhoYou, kEvParam, 1, P_SACCENT, 50, 51)});
+        CHECK(std::string(s.logText(0)) == "You › Nudge Seq", "nudge line 0: %s", s.logText(0));
+        CHECK(std::string(s.logText(1)) == "You › Seq Cutoff +5", "nudge line 1: %s", s.logText(1));
+        CHECK(std::string(s.logText(2)) == "You › Seq Decay −5", "nudge line 2: %s", s.logText(2));
+        feed(s, in, {ev(kWhoYou, kEvNudge, 1), ev(kWhoYou, kEvParam, 1, P_CUTOFF, 0, 30), ev(kWhoYou, kEvParam, 1, P_DRIFT, 2, 4)});
+        CHECK(std::string(s.logText(1)) == "You › Seq Drift +2" && std::string(s.logText(2)) == "You › Seq Cutoff +30",
+              "for its range: %s / %s", s.logText(1), s.logText(2));
+        // what comes after the burst is newer; Evolve's values end it and stay in order
+        feed(s, in, {ev(kWhoYou, kEvNudge, 3), ev(kWhoYou, kEvParam, 3, P_S2CUT, 40, 44), ev(kWhoEvolve, kEvParam, 3, P_S2DEC, 35, 36),
+                     ev(kWhoYou, kEvNextChord)});
+        CHECK(std::string(s.logText(0)) == "You › Next chord" && std::string(s.logText(1)) == "Evolve › Seq 2 Decay +1" &&
+              std::string(s.logText(2)) == "You › Nudge Seq 2", "after: %s / %s / %s", s.logText(0), s.logText(1), s.logText(2));
+    }
+    // Evolve's bursts: one line per value, in order
+    {
+        Sky s;
+        feed(s, in, {ev(kWhoEvolve, kEvParam, 1, P_CUTOFF, 45, 46), ev(kWhoEvolve, kEvParam, 1, P_DECAY, 35, 20),
+                     ev(kWhoEvolve, kEvParam, 1, P_SACCENT, 50, 52)});
+        CHECK(std::string(s.logText(0)) == "Evolve › Seq Accent +2" && std::string(s.logText(1)) == "Evolve › Seq Decay −15" &&
+              std::string(s.logText(2)) == "Evolve › Seq Cutoff +1", "Evolve in order");
+    }
+    // the app's own: a shake and a nudge, through takeEvents
+    for (int shake = 1; shake >= 0; shake--)
+    {
+        start(2);
+        drain();
+        nudgeLayer(shake ? 2 : 1, shake);
+        const std::vector<Event> e = drain();
+        CHECK(e.size() >= 2 && e[0].what == (shake ? kEvShake : kEvNudge), "app burst %d: %d events", shake, (int)e.size());
+        std::vector<Event> vals;
+        Event action = e[0];
+        for (size_t i = 1; i < e.size(); i++)
+            if (e[i].what == kEvVoice)
+                action = e[i];
+            else
+                vals.push_back(e[i]);
+        std::stable_sort(vals.begin(), vals.end(), [](const Event& a, const Event& b) { return relMove(a) > relMove(b); });
+        Sky s;
+        feed(s, in, e);
+        CHECK(std::string(s.logText(0)) == fmt(action), "app burst %d line 0: %s", shake, s.logText(0));
+        if (shake) CHECK(action.what == kEvVoice && std::string(s.logText(0)).rfind("You › Shake Lead ", 0) == 0, "shake shows its voice");
+        for (int l = 1; l < 3; l++)
+            CHECK(std::string(s.logText(l)) == (l - 1 < (int)vals.size() ? fmt(vals[l - 1]) : std::string()),
+                  "app burst %d line %d: %s", shake, l, s.logText(l));
+    }
+}
+
 void reset_clears()
 {
     Sky s;
@@ -1286,6 +1358,7 @@ int main()
     log_order_and_fit();
     every_format_fits();
     reset_clears();
+    hand_burst_order();
     if (fails)
     {
         std::printf("test_screen: %d failures\n", fails);
