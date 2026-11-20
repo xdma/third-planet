@@ -137,8 +137,14 @@ enum SlotState { kSlotGap, kSlotWalk, kSlotWritten };
 SlotState slotState(int i);       // the Chords page's slot i (0..7)
 int slotChordCode(int i);         // slot i's chord in chordCode()'s numbers, named as ui.c slot_label names it
                                   // (written: its root, kind and type; the walk's: its pitch classes); 0 for a gap
-int nextChordCode();              // the chord the next change brings (Endless: slot 1's; Loop: the next non-gap slot's)
-int barsToChange();               // bars left of this chord, the one playing counted; -1 at Drift Hold
+int nextChordCode();              // the next chord that will sound (Endless: the first slot from 1 that isn't a gap;
+                                  // Loop: the first after progPos() that isn't a gap, going round); 0 none
+int barsToChange();               // bars to the engine's next change, the one playing counted (1: this is the last);
+                                  // -1 at Drift Hold. A change onto a gap holds the chord. While held() the engine
+                                  // counts on but does not change: this reaches 0 and stays there (1 once let go)
+int barsToNextChord();            // bars until nextChordCode() sounds, the one playing counted: barsToChange() and
+                                  // Drift's bars for each gap changed onto before it. -2 while held() (changes
+                                  // paused; before the others); -1 at Drift Hold or with no next chord
 int loopStep(int seq);            // the step a sequence plays (seq 0..1)
 const char* slotLabel(int i, char* buf);   // (tests) ui.c's own slot_label(); buf: kChordTextMax
 

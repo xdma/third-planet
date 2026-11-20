@@ -480,23 +480,47 @@ int slotChordCode(int i)
     default: return 0;
     }
 }
-int nextChordCode()   // (en_chord_change: Endless moves slot 1 down to 0 and plays it; Loop plays the slots in turn)
+// The slot whose chord sounds next, -1 none; *skipped: the gaps the engine changes onto before it (each holds the
+// chord a change longer). en_chord_change: Endless moves every slot down one and plays slot 0 (a gap there holds);
+// Loop plays the slots in turn to prog_count(), a gap holding the chord before it.
+static int nextSlot(int* skipped)
 {
-    if (!loopMode()) return slotChordCode(1);
+    *skipped = 0;
+    if (!loopMode())
+    {
+        for (int i = 1; i < EN_NPROG; i++)
+            if (!slot_is_gap(i)) return *skipped = i - 1, i;
+        return -1;
+    }
     const int n = prog_count(), p = en_prog_pos;   // (-1 before the first: from slot 0)
     for (int k = 1; k <= n; k++)
     {
         const int i = (p + k) % n;
-        if (!slot_is_gap(i)) return slotChordCode(i);
+        if (!slot_is_gap(i)) return *skipped = k - 1, i;
     }
-    return 0;
+    return -1;
+}
+int nextChordCode()
+{
+    int skipped;
+    const int i = nextSlot(&skipped);
+    return i < 0 ? 0 : slotChordCode(i);
 }
 int barsToChange()   // (the bars gone as ring_dots counts them, so the count and its last bar agree)
 {
     const int db = en_drift_bars(proj.par[P_DRIFT]);
     if (!db) return -1;
     const int k = (int)(en_drift * (float)db + 0.5f);
-    return k >= db ? 0 : db - k;
+    if (k < db) return db - k;
+    return en_frozen ? 0 : 1;   // (held: the engine counts on, en_drift stops at 1; let go, it changes at the next bar)
+}
+int barsToNextChord()
+{
+    if (en_frozen) return -2;
+    const int db = en_drift_bars(proj.par[P_DRIFT]);
+    int skipped;
+    if (!db || nextSlot(&skipped) < 0) return -1;
+    return barsToChange() + db * skipped;
 }
 int loopStep(int q) { return q >= 0 && q < 2 ? en_loop_pos[q] : 0; }
 const char* slotLabel(int i, char* buf)

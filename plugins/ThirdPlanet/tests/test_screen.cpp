@@ -3,7 +3,8 @@
 //   1. each readout equals the engine global it reads, while a piece plays;
 //   2. Evolve's chance is ui.c nudge_tick's, and 0 while locked, held or resting;
 //   3. a slot's chord number names exactly what ui.c's slot_label() does, on every piece and walk character;
-//   4. the next chord: Endless, slot 1's (what the next change brings); Loop, the next slot that isn't a gap;
+//   4. the next chord: Endless, the first slot from 1 that isn't a gap; Loop, the next slot that isn't a gap; and
+//      against the engine, with gaps between: the chord the engine actually brings, after barsToNextChord() bars;
 //   5. the ring is ui.c ring_dots' at random moments, stays put while held, and is absent at Drift Hold.
 //   c++ -std=c++17 -O2 -I plugins/ThirdPlanet/src -I deps/mpc-plugin-sdk/framework \
 //       plugins/ThirdPlanet/tests/test_screen.cpp plugins/ThirdPlanet/src/app_unit.cpp \
@@ -14,6 +15,7 @@
 #include <cstring>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "app_api.h"
 #include "engine.h"
@@ -275,6 +277,129 @@ void next_chord()
     CHECK(changes >= 3, "Endless: %d changes seen", changes);
 }
 
+// The engine's own account of the next chord: at sampled moments, nextChordCode() and barsToNextChord() are
+// recorded; the engine then runs, and the first change that lands on a slot that isn't a gap (a gap holds the
+// chord) must come after exactly that many bar lines, and sound that chord. Bars remaining = the bar lines from the
+// moment to the change, the change's own counted (in a chord's last bar: 1), as barsToChange() counts.
+struct Pending { std::string name; int bars, barAt, t, pb, pos; };
+void checkAgainstEngine(const char* where, int ms, int* resolved)
+{
+    std::vector<Pending> pend;
+    int barCount = 0, quiet = 0, landed = -1;
+    int lastBar = phraseBar(), lastPos = en_prog_pos;
+    uint32_t lastGen = en_prog_gen;
+    for (int t = 0; t < ms; t++)
+    {
+        stepMs(chunk);
+        if (phraseBar() != lastBar) { lastBar = phraseBar(); barCount++; }
+        bool change = false, onGap = false;
+        if (loopMode())
+        {
+            if (en_prog_pos != lastPos)
+            {
+                change = true;
+                const int q = en_prog_pos;
+                onGap = q >= 0 && !en_prog_slot[q][0] && !en_prog_slot[q][1];
+            }
+        }
+        else if (en_prog_gen != lastGen)
+        {
+            change = true;
+            onGap = !en_prog_slot[0][0] && !en_prog_slot[0][1];
+        }
+        lastPos = en_prog_pos, lastGen = en_prog_gen;
+        if (change)
+        {
+            quiet = 20;   // (the UI takes the engine's slots at its next frame)
+            if (!onGap) landed = barCount;
+        }
+        if (landed >= 0 && quiet == 1)   // the chord landed: every moment sampled before it is resolved
+        {
+            const std::string now = name(chordCode());
+            for (const Pending& p : pend)
+            {
+                CHECK(p.bars == landed - p.barAt, "%s: predicted %d bars, the chord came after %d (at %d ms, bar %d, slot %d)",
+                      where, p.bars, landed - p.barAt, p.t, p.pb, p.pos);
+                CHECK(p.name == now, "%s: predicted %s, the change brought %s", where, p.name.c_str(), now.c_str());
+                (*resolved)++;
+            }
+            pend.clear();
+            landed = -1;
+        }
+        if (quiet) { quiet--; continue; }
+        if (t % 211 == 0 && barCount >= 1)   // (an edit of the slot playing restarts its bars mid-bar, amb.c
+                                             // slot_play; en_drift shows it from the next bar line)
+        {
+            const int b = barsToNextChord();
+            CHECK(b >= 1, "%s: barsToNextChord %d", where, b);
+            pend.push_back({name(nextChordCode()), b, barCount, t, phraseBar(), progPos()});
+        }
+    }
+}
+
+void next_chord_engine()
+{
+    // Loop, slots 1, 2 written, 3 a gap, 4 written
+    start(4);
+    knob(kKnobLoop, 1);
+    knob(P_DRIFT, 0);   // (2 bars a chord)
+    const int roots[EN_NPROG] = {0, 5, -1, 9, -1, -1, -1, -1};
+    for (int i = 0; i < EN_NPROG; i++)
+    {
+        knob(kKnobSlot, i);
+        setChordRoot(roots[i]);
+    }
+    run(50);
+    CHECK(progCount() == 4 && slotState(2) == kSlotGap, "Loop setup: %d", progCount());
+    int resolved = 0;
+    checkAgainstEngine("Loop, gap at 3", 90000, &resolved);
+    CHECK(resolved > 50, "Loop: %d moments resolved", resolved);
+    // Drift 4 bars, the same
+    knob(P_DRIFT, 1);
+    run(50);
+    resolved = 0;
+    checkAgainstEngine("Loop, 4 bars", 90000, &resolved);
+    CHECK(resolved > 30, "Loop 4 bars: %d moments resolved", resolved);
+
+    // Endless with slot 1 a gap (and, after the change, slot 0: the chord held a change longer)
+    for (int pc : {0, 5})
+    {
+        start(pc);
+        knob(P_DRIFT, 0);
+        knob(kKnobSlot, 1);
+        setChordRoot(-1);
+        knob(kKnobSlot, 4);
+        setChordRoot(-1);
+        run(50);
+        CHECK(!loopMode() && slotState(1) == kSlotGap, "Endless setup");
+        CHECK(nextChordCode() == slotChordCode(2) && barsToNextChord() == barsToChange() + 2,
+              "Endless, slot 1 a gap: next %d (slot 2 %d), bars %d (to change %d)", nextChordCode(), slotChordCode(2),
+              barsToNextChord(), barsToChange());
+        resolved = 0;
+        checkAgainstEngine("Endless, gaps at 1 and 4", 60000, &resolved);
+        CHECK(resolved > 50, "Endless: %d moments resolved", resolved);
+    }
+
+    // Hold: changes paused
+    setHold(true);
+    run(30);
+    CHECK(held() && barsToNextChord() == -2, "Hold: barsToNextChord %d", barsToNextChord());
+    run(20000);
+    CHECK(barsToNextChord() == -2 && barsToChange() == 0, "Hold, later: %d, barsToChange %d", barsToNextChord(),
+          barsToChange());
+    setHold(false);
+    run(30);
+    // (the chord's bars ran out while held: it changes at the next bar line)
+    CHECK(barsToChange() == 1 && barsToNextChord() >= 1, "Hold off: %d, barsToChange %d", barsToNextChord(), barsToChange());
+    resolved = 0;
+    checkAgainstEngine("Endless, after Hold", 20000, &resolved);
+    CHECK(resolved > 10, "after Hold: %d moments resolved", resolved);
+    // Drift Hold
+    knob(P_DRIFT, 6);
+    run(30);
+    CHECK(barsToNextChord() == -1, "Drift Hold: %d", barsToNextChord());
+}
+
 void ring_matches_ui()
 {
     start(3);
@@ -328,6 +453,7 @@ int main()
     evolve_chance();
     slot_codes_name_like_ui();
     next_chord();
+    next_chord_engine();
     ring_matches_ui();
     if (fails)
     {
