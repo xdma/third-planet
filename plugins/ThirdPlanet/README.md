@@ -112,8 +112,11 @@ MPC project saves instead.
 - `src/power.{h,cpp}`: the power switch. Every NACHTFAHRT variable goes back to its power-on value on
   every boot.
 - `src/ThirdPlanet.cpp`, `src/params.h`: the MPC side (the pad banks, parameters, switches and
-  one-shots, Sync, saving, the status line). The status line is four read-only parameters after the 173
-  controls (Pad, Chord, Hold, Lock), sent to the MPC when they change.
+  one-shots, Sync, saving, the status line). The display parameters are read-only and come after the 173
+  controls: the status line's four (Pad, Chord, Hold, Lock), then the star-chart screen's 56
+  (`d_section` to `d_source`). They are sent to the MPC when they change, at most 24 notifications a
+  block shared with the controls: the planets and drifts 10 times a second, the particles a half at a time.
+- `src/sky.{h,cpp}`: the star-chart screen's model (particles, planets, the log's three lines).
 - `skins/`: the screen. `tools/gen_skin.py` makes it from `ui.json` with the SDK's generator, then adds
   the status line, moves the grid down, adds the PATTERN page's steps and accents and builds the LAYERS
   page. With `skins/` present the build copies it as it is, so rerun the script after changing `ui.json`
@@ -128,10 +131,10 @@ From the repository root:
 | --- | --- |
 | `plugins/ThirdPlanet/tests/null_test.sh` | The engine as built here (C++) against upstream's build (C99, `-ffp-contract=off`). All ten pieces must match bit for bit. |
 | `plugins/ThirdPlanet/tests/app_null.sh` | The app and the engine against upstream's own host simulator (`host/amb_host.c`, unpatched sources), on scripted play (keys, effects, pieces, knobs, PERFORM, Hold, Evolve). Every WAV must match byte for byte. |
-| `c++ -std=c++17 -O2 -I plugins/ThirdPlanet/src -I deps/mpc-plugin-sdk/framework plugins/ThirdPlanet/tests/test_plugin.cpp plugins/ThirdPlanet/src/app_unit.cpp plugins/ThirdPlanet/src/engine_unit.cpp plugins/ThirdPlanet/src/power.cpp -o plugins/ThirdPlanet/build/tests/test_plugin && plugins/ThirdPlanet/build/tests/test_plugin` | The plugin glue. A reboot must be a power-on. Output must equal the app's own at any block size, with and without pads played. Then parameters both ways, a save and a load, and a second instance. |
+| `c++ -std=c++17 -O2 -I plugins/ThirdPlanet/src -I deps/mpc-plugin-sdk/framework plugins/ThirdPlanet/tests/test_plugin.cpp plugins/ThirdPlanet/src/app_unit.cpp plugins/ThirdPlanet/src/engine_unit.cpp plugins/ThirdPlanet/src/power.cpp plugins/ThirdPlanet/src/sky.cpp -o plugins/ThirdPlanet/build/tests/test_plugin && plugins/ThirdPlanet/build/tests/test_plugin` | The plugin glue. A reboot must be a power-on. Output must equal the app's own at any block size, with and without pads played. Then parameters both ways, a save and a load, and a second instance. |
 | `tests/test_controls.cpp` (built like `test_plugin`) | The controls: every pad bank against the engine state it sets, releases across a change of Keys or Pad base, all notes off, notes outside the banks; every switch both ways; every one-shot acts once a press and goes back to Off; steps, accents and the chord root; a project load that fires no one-shot. |
 | `tests/test_equiv.cpp` (built like `test_plugin`) | Every MPC control against the FM-1 gesture it stands for, on two bit-exact boots: PERFORM's mute, solo and move keys, REC held with a key, the black keys, HOME and GLO held on, the nudge and shake holds, the Pattern and Chords pages' keys. Audio and saved project must be identical. |
-| `tests/test_display.cpp` (built like `test_plugin`) | The status line. The chord's name must equal the FM-1 screen's own (`chord_now`) on every piece, walk and Loop setting. Pad, Hold and Lock must follow the pads and the switches. A value the MPC writes over must be corrected, and a second instance must show only its message. |
+| `tests/test_display.cpp` (built like `test_plugin`) | The status line. The chord's name must equal the FM-1 screen's own (`chord_now`) on every piece, walk and Loop setting. Pad, Hold and Lock must follow the pads and the switches. A value the MPC writes over must be corrected, and a second instance must show only its message. The screen's display parameters: each follows the state it shows, no block sends more than 24 notifications, nothing is sent at rest, a project load logs nothing, and every text fits 31 bytes. |
 | `tests/test_sync.cpp` (built like `test_plugin`) | Sync, through the plugin's VST entry point and a fake host clock: rest, start, the tempo followed at 120 and 90 BPM, stop, and Sync off while playing and while resting. |
 | `tests/test_fuzz.cpp` (built like `test_plugin`, with `-fsanitize=address,undefined -fno-sanitize=shift-base`) | Random notes, all-notes-off, parameters, saves and loads, at random block sizes. The output must stay finite and bounded. Upstream's `wd_read` reads one sample past its buffer (T-1723); run it with `-fsanitize-recover=address ASAN_OPTIONS=halt_on_error=0` until that is decided. |
 | `deps/mpc-plugin-sdk/.sdk-tools/host_sim plugins/ThirdPlanet/build/native/third-planet.dylib test` | The SDK's MPC host checks. Two warnings are expected: the instrument plays on after all-notes-off, and the saved project changes as it plays. |

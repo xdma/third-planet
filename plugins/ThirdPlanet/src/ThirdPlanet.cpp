@@ -16,6 +16,9 @@
 //                                     Next chord, New chords, Shake all, Reset, the nudges and shakes as
 //                                     one-shots (src/params.h)
 //   Sync                              the MPC's tempo and transport, sent to the FM-1 as MIDI clock
+//   display parameters                outputs only, after the controls: the status line (Pad, Chord, Hold, Lock)
+//                                     and the star-chart screen's (the arc, the ring, the slots, the particles,
+//                                     the planets, the log; src/sky.h), sent as they change, 24 a block at most
 //
 // Signal flow: the panel -> the FM-1 app (ui.c) -> engine commands -> en_render (Drone, Sequence,
 // Sequence 2, Lead, Atmosphere, echo, plate) in 256-frame blocks -> stereo out. Time inside is the
@@ -37,6 +40,7 @@
 #include "app_api.h"
 #include "engine.h"
 #include "params.h"
+#include "sky.h"
 
 namespace {
 
@@ -52,15 +56,82 @@ constexpr int kDispPad = tp::kNumControls;   // what the last pad or note did (k
 constexpr int kDispChord = kDispPad + 1;     // the chord sounding (tp::app::chordCode)
 constexpr int kDispHold = kDispPad + 2;      // Hold
 constexpr int kDispLock = kDispPad + 3;      // Lock
-constexpr int kNumDisplay = 4;
-static_assert(kDispChord == kDispPad + 1 && kDispHold == kDispPad + 2 && kDispLock == kDispPad + kNumDisplay - 1,
-              "status() fills them in this order");
+// All of them by display index k (parameter kDispPad + k): the status line's four, then the star-chart screen's
+// (docs/superpowers/specs/2026-11-20-third-planet-screen-design.md, section 10). tools/gen_skin.py finds them by id
+// (d_section .. d_source), so their order is free to grow at the end only.
+constexpr int kSlots = EN_NPROG, kPucks = tp::sky::kPucks, kPlanets = tp::sky::kPlanets, kLogLines = tp::sky::kLogLines;
+enum Disp : int
+{
+    kDPad, kDChord, kDHold, kDLock,
+    kDSection,      // the arc's section, 1..4 (0 none)
+    kDPhrase,       // the bar of the phrase, 1..8 (0 none)
+    kDEvolve,       // percent of phrases Evolve nudges now
+    kDNext,         // the next chord that will sound (a chord code)
+    kDNextIn,       // bars until it does: -2 on hold, -1 none
+    kDProg,         // 0 none; 1..3 Endless and the walk's character; 4 + position x 8 + (count - 1) in Loop
+    kDRing,         // 0 no ring; 1..33 the chord's dots 0..32; 34..66 in its last bar; 67..99 held
+    kDSlot,         // x 8: 0 a gap, 1 the walk's, 2 written, 3 the one playing
+    kDSlotName = kDSlot + kSlots,       // x 8: the slot's chord code
+    kDPx = kDSlotName + kSlots,         // x 8, then kDPy x 8: the particles, 0..1 in their orbit's pad
+    kDPy = kDPx + kPucks,
+    kDPlanet = kDPy + kPucks,           // x 5: the layer's planet frame (Sky::planetFrame)
+    kDLog = kDPlanet + kPlanets,        // x 3: the log line's serial; its text is the line
+    kDDrift = kDLog + kLogLines,        // x 5: the layer's filter drift, tenths of an octave
+    kDDensity = kDDrift + kPlanets,     // Density's slow drift
+    kDStep,         // the step the Pattern page's lane plays, 16 none
+    kDExt,          // on the MPC's clock
+    kDSource,       // (reserved: the harmony's source, milestone B)
+    kNumDisplay
+};
+static_assert(kDispChord == kDispPad + kDChord && kDispHold == kDispPad + kDHold && kDispLock == kDispPad + kDLock,
+              "the status line's four come first");
+static_assert(EN_NPROG == 8 && EN_NSEC == 4 && EN_NWALK == 3 && tp::app::kNumLayers == kPlanets, "the screen's counts");
+constexpr int kMirrorMin = 4;         // of a block's kMaxSends, the controls always get this many
+constexpr int kPuckUnit = 1000;       // a particle's 0..1, in the thousandths the scheduler compares
+constexpr int kPuckMove = 2;          // ... sent when it moved by more than this
+constexpr int kPuckFrames = 2205;     // half of the particles every 50 ms, the halves in turn: 10 Hz each
+constexpr int kPaceFrames = 4410;     // the planets and the drifts: 10 a second at most
+constexpr int kLogSlots = 1024;       // a log line's value: its serial modulo this
+constexpr int kLogWords = tp::sky::kTextMax / 4;
+
+constexpr bool isPuck(int k) { return k >= kDPx && k < kDPlanet; }
+constexpr bool isPaced(int k) { return (k >= kDPlanet && k < kDLog) || (k >= kDDrift && k <= kDDensity); }
+constexpr bool isLog(int k) { return k >= kDLog && k < kDLog + kLogLines; }
+constexpr bool isChordCode(int k) { return k == kDChord || k == kDNext || (k >= kDSlotName && k < kDPx); }
+
 // The Pad field's values: 0 nothing yet; a note n (Lead mode, or outside the banks) n + 1; then the banks.
 constexpr int kPadBusy = 129, kPadLead0 = 130, kPadFx0 = kPadLead0 + kPadLeadN, kPadMove0 = kPadFx0 + kPadFxN,
               kPadCodes = kPadMove0 + kPadMoveN;
+// A display value's range, and `rest`: what it is with nothing to show (the parameter's default).
+struct DispRange { int lo, hi, rest; };
+constexpr DispRange dispRange(int k)
+{
+    return k == kDPad ? DispRange{0, kPadCodes - 1, 0}
+         : isChordCode(k) ? DispRange{0, tp::app::kChordCodes - 1, 0}
+         : k == kDSection ? DispRange{0, EN_NSEC, 0}
+         : k == kDPhrase ? DispRange{0, 8, 0}
+         : k == kDEvolve ? DispRange{0, 100, 0}
+         : k == kDNextIn ? DispRange{-2, 64, -1}
+         : k == kDProg ? DispRange{0, 3 + 8 * 8, 0}
+         : k == kDRing ? DispRange{0, 99, 0}
+         : k >= kDSlot && k < kDSlotName ? DispRange{0, 3, 0}
+         : isPuck(k) ? DispRange{0, kPuckUnit, kPuckUnit / 2}
+         : k >= kDPlanet && k < kDLog ? DispRange{0, 23, 0}
+         : isLog(k) ? DispRange{0, kLogSlots - 1, 0}
+         : k >= kDDrift && k < kDDensity ? DispRange{-45, 45, 0}
+         : k == kDDensity ? DispRange{-100, 100, 0}
+         : k == kDStep ? DispRange{0, 16, 16}
+         : DispRange{0, 1, 0};   // Hold, Lock, EXT, the source
+}
 const char* const kHoldText[] = {" ", "HOLD"};
 const char* const kLockText[] = {" ", "LOCK"};
 const char* const kBusyText = "Another Third Planet plays";
+const char* const kSectionText[] = {" ", "EMERGE", "FLOW", "SOLO", "BRIDGE"};   // (EN_SEC_NAME, as the screen's caps)
+const char* const kWalkText[] = {"HOME", "WANDER", "FREE"};                     // (EN_WALK_NAME)
+const char* const kExtText[] = {" ", "EXT"};
+const char* const kSourceText[] = {" ", "PERFORMER"};
+#define TP_MINUS "\xE2\x88\x92"   // U+2212, as the log writes a fall
+#define TP_DOT "\xC2\xB7"         // U+00B7
 constexpr int kFixFrames = 4410;   // a status value the MPC wrote over is corrected at most every 100 ms
 constexpr uint32_t kSwitchSettle = 2;   // chunks a switch keeps the MPC's value after a write (Hold, Play: a block late)
 
@@ -200,6 +271,89 @@ mpc::Param makeParam(const tp::ParamDef& d)
     return mpc::intParam(d.id, name, lo, hi, def, "");
 }
 
+// A screen value's text, 31 bytes at most, in ASCII and the glyphs the MPC's fonts have; " " is blank. False: the
+// value shows as it is (a film strip's frame, a choice, a particle's place). The log's lines are the plugin's.
+bool screenText(int k, int v, char* t, size_t n)
+{
+    const int a = v < 0 ? -v : v;
+    if (isChordCode(k))
+    {
+        char c[tp::app::kChordTextMax];
+        tp::app::chordText(v, c);
+        std::snprintf(t, n, "%s", c[0] != 0 ? c : " ");
+    }
+    else if (k == kDEvolve)
+    {
+        if (v > 0) std::snprintf(t, n, "EVOLVE %d%%", v);
+        else std::snprintf(t, n, " ");
+    }
+    else if (k == kDNextIn)   // (app_api.h barsToNextChord)
+    {
+        if (v == -2) std::snprintf(t, n, "ON HOLD");
+        else if (v < 0) std::snprintf(t, n, " ");
+        else if (v <= 1) std::snprintf(t, n, "ON THE BAR");
+        else std::snprintf(t, n, "IN %d BARS", v);
+    }
+    else if (k == kDProg)
+    {
+        if (v >= 1 && v <= EN_NWALK) std::snprintf(t, n, "ENDLESS " TP_DOT " %s", kWalkText[v - 1]);
+        else if (v > EN_NWALK && v <= dispRange(kDProg).hi) std::snprintf(t, n, "LOOP %d/%d", (v - 4) / 8 + 1, (v - 4) % 8 + 1);
+        else std::snprintf(t, n, " ");
+    }
+    else if (k >= kDDrift && k < kDDensity)   // (ui.c's sound pages, from a tenth of an octave)
+    {
+        if (a >= 1) std::snprintf(t, n, "MOVING %s %s%d.%d OCT", v < 0 ? "DARKER" : "BRIGHTER", v < 0 ? TP_MINUS : "+", a / 10, a % 10);
+        else std::snprintf(t, n, " ");
+    }
+    else if (k == kDDensity)   // (ui.c's Sequence page, from 3 of Density's units)
+    {
+        if (a >= 3) std::snprintf(t, n, "MOVING %s %s%d", v < 0 ? "SPARSER" : "DENSER", v < 0 ? TP_MINUS : "+", a);
+        else std::snprintf(t, n, " ");
+    }
+    else
+        return false;
+    return true;
+}
+
+// The screen's display parameter k (from kDSection on).
+mpc::Param makeDisplay(int k)
+{
+    const DispRange r = dispRange(k);
+    char id[24], name[24];
+    auto numbered = [&](const char* i, const char* nm, int first) {
+        std::snprintf(id, sizeof id, "%s%d", i, k - first + 1);
+        std::snprintf(name, sizeof name, "%s %d", nm, k - first + 1);
+        return mpc::intParam(id, name, r.lo, r.hi, r.rest, "");
+    };
+    switch (k)
+    {
+        case kDSection: return mpc::choiceParam("d_section", "Section", std::vector<std::string>(kSectionText, kSectionText + 5), 0);
+        case kDPhrase: return mpc::intParam("d_phrase", "Phrase bar", r.lo, r.hi, r.rest, "");
+        case kDEvolve: return mpc::intParam("d_evolve", "Evolve chance", r.lo, r.hi, r.rest, "");
+        case kDNext: return mpc::intParam("d_next", "Next chord", r.lo, r.hi, r.rest, "");
+        case kDNextIn: return mpc::intParam("d_next_in", "Next chord in", r.lo, r.hi, r.rest, "");
+        case kDProg: return mpc::intParam("d_prog", "Progression", r.lo, r.hi, r.rest, "");
+        case kDRing: return mpc::intParam("d_ring", "Chord ring", r.lo, r.hi, r.rest, "");
+        case kDDensity: return mpc::intParam("d_density", "Density drift", r.lo, r.hi, r.rest, "");
+        case kDStep: return mpc::intParam("d_step", "Step playing", r.lo, r.hi, r.rest, "");
+        case kDExt: return mpc::choiceParam("d_ext", "Clock", std::vector<std::string>(kExtText, kExtText + 2), 0);
+        case kDSource: return mpc::choiceParam("d_source", "Harmony source", std::vector<std::string>(kSourceText, kSourceText + 2), 0);
+        default: break;
+    }
+    if (k < kDSlotName) return numbered("d_slot", "Slot", kDSlot);
+    if (k < kDPx) return numbered("d_slotname", "Slot chord", kDSlotName);
+    if (isPuck(k))
+    {
+        const bool y = k >= kDPy;
+        std::snprintf(id, sizeof id, "d_p%c%d", y ? 'y' : 'x', k - (y ? kDPy : kDPx) + 1);
+        std::snprintf(name, sizeof name, "Particle %d %c", k - (y ? kDPy : kDPx) + 1, y ? 'Y' : 'X');
+        return mpc::floatParam(id, name, 0.0f, 1.0f, (float)r.rest / (float)kPuckUnit, "", 3);
+    }
+    if (k < kDLog) return numbered("d_planet", "Planet", kDPlanet);
+    if (k < kDDrift) return numbered("d_log", "Log line", kDLog);
+    return numbered("d_drift", "Filter drift", kDDrift);
+}
+
 } // namespace
 
 class ThirdPlanet : public mpc::Plugin
@@ -221,6 +375,14 @@ public:
         addDisplay(mpc::intParam("d_chord", "Chord", 0, tp::app::kChordCodes - 1, 0, ""));
         addDisplay(mpc::choiceParam("d_hold", "Hold status", std::vector<std::string>(kHoldText, kHoldText + 2), 0));
         addDisplay(mpc::choiceParam("d_lock", "Lock status", std::vector<std::string>(kLockText, kLockText + 2), 0));
+        for (int k = kDSection; k < kNumDisplay; ++k) addDisplay(makeDisplay(k));
+        for (int k = 0; k < kNumDisplay; ++k)
+        {
+            displaySent_[k].store(INT_MIN, std::memory_order_relaxed);   // (INT_MIN: never sent)
+            fixOne_[k].store(false, std::memory_order_relaxed);
+        }
+        for (auto& line : logText_)
+            for (std::atomic<uint32_t>& w : line) w.store(0, std::memory_order_relaxed);
         forgetHeld();
         displayReset_.store(true, std::memory_order_relaxed);
     }
@@ -238,9 +400,15 @@ public:
     void parameterChanged(int index, float plainValue) override
     {
         if (index >= kDispPad && index < kDispPad + kNumDisplay)
-        {   // (the MPC wrote a status value itself, a load or automation: the true one goes out again)
-            if ((int)std::lround(plainValue) != displaySent_[index - kDispPad].load(std::memory_order_acquire))
+        {   // (the MPC wrote a display value itself, a load or automation: the true one goes out again)
+            const int k = index - kDispPad, sent = displaySent_[k].load(std::memory_order_acquire);
+            const bool same = isPuck(k) ? sent != INT_MIN && std::fabs(plainValue * (float)kPuckUnit - (float)sent) <= 1.0f
+                                        : (int)std::lround(plainValue) == sent;
+            if (!same)
+            {
+                fixOne_[k].store(true, std::memory_order_release);
                 displayFix_.store(true, std::memory_order_release);
+            }
             return;
         }
         if (index < 0 || index >= tp::kNumControls) return;
@@ -257,11 +425,20 @@ public:
             out = padText(std::isfinite(plainValue) ? (int)std::lround(plainValue) : 0);
             return true;
         }
-        if (index == kDispChord)
+        if (index > kDispPad && index < kDispPad + kNumDisplay)
         {
-            char t[tp::app::kChordTextMax];
-            tp::app::chordText(std::isfinite(plainValue) ? (int)std::lround(plainValue) : 0, t);
-            out = t[0] != 0 ? t : " ";
+            const int k = index - kDispPad;
+            const DispRange r = dispRange(k);
+            int v = std::isfinite(plainValue) ? (int)std::lround(plainValue) : r.rest;
+            v = v < r.lo ? r.lo : v > r.hi ? r.hi : v;
+            if (isLog(k))
+            {
+                out = logLine(v);
+                return true;
+            }
+            char t[tp::sky::kTextMax];
+            if (!screenText(k, v, t, sizeof t)) return false;
+            out = t;
             return true;
         }
         if (index < 0 || index >= tp::kNumControls || isChoice(index)) return false;
@@ -316,26 +493,40 @@ public:
         if (!lease_.claim(this, fresh))   // another instance owns the engine: silence, and the screen says so
         {
             forgetHeld();   // (what this instance held went with the engine; the owner boots its own)
-            const int busy[kNumDisplay] = {kPadBusy, 0, 0, 0};
-            sendDisplay(busy, kMaxSends, ctx.numFrames);
+            sendBusy();
             return;
         }
+        actionSends_ = 0;
         if (loadPending_.exchange(false, std::memory_order_acq_rel))
         {
             ownLen_ = pendingLen_;
             if (ownLen_ > 0) std::memcpy(ownBlob_, pendingBlob_, (size_t)ownLen_);
             fresh = true;
         }
-        if (fresh || !booted_.load(std::memory_order_relaxed)) boot();
+        const bool booting = fresh || !booted_.load(std::memory_order_relaxed);
+        if (booting) boot();
 
         applyParams();
+        if (booting)
+        {   // (the switches a load brought back were set through the hand's setters: not the hand's, not logged)
+            tp::app::Event drop[tp::app::kNumEvents];
+            while (tp::app::takeEvents(drop, tp::app::kNumEvents) > 0) {}
+            sky_.reset();
+            skyCarry_ = 0;
+        }
         tp::app::setMaster((uint32_t)getInt(0) * 2048u / 100u);
         midiIn(ctx);
         clock(ctx);
         render(ctx);
-        mirror(kMaxSends - sendDisplay(status(), kMaxSends, ctx.numFrames));
+        watch(ctx.numFrames);
+        // A block's notifications, kMaxSends in all: the one-shots' way back to Off (applyParams), then the display,
+        // then the controls with what is left, never fewer than kMirrorMin.
+        const int left = kMaxSends - actionSends_;
+        mirror(left - sendDisplay(status(), left - kMirrorMin, ctx.numFrames));
         if (chunks_ > kSettleChunks) hostKnows_.store(true, std::memory_order_release);   // (every value sent back by now)
     }
+
+    const tp::sky::Sky& sky() const { return sky_; }   // (tests: the screen's model, as the audio thread left it)
 
 private:
     static mpc::PluginInfo makeInfo()
@@ -429,6 +620,7 @@ private:
                     appVal_[i].store(0, std::memory_order_release);   // (before the write: it comes back here)
                     setNormalised(i, 0.0f);
                     notifyHostParameterChanged(i);
+                    ++actionSends_;
                     if (v) act(d.code);
                     break;
                 case Kind::Step: app::setStep(d.code, v != 0); settle(i, v); break;
@@ -614,39 +806,193 @@ private:
         }
     }
 
-    // What the app changed by itself (a piece, Evolve, a shake, the engine's macros) back to the MPC.
-    // The status line's values now.
+    // The screen's model, once a block: the app's readouts and what it logged since the last block (all of it in
+    // one call, so a hand's action and the values it moved stay together), over the block's time.
+    void watch(int frames)
+    {
+        using namespace tp::app;
+        Event events[kNumEvents];
+        tp::sky::SkyInput in;
+        in.playing = playing();
+        in.held = held();
+        for (int q = 0; q < 2; ++q) in.hits[q] = seqHits(q), in.reps[q] = seqReps(q);
+        for (int l = 0; l < kPlanets; ++l) in.heard[l] = layerHeard(l), in.act[l] = layerActivity(l);
+        in.numEvents = takeEvents(events, kNumEvents);
+        in.events = events;
+        in.piece = piece();
+        skyCarry_ += (long long)frames * 1000;   // (in milliseconds, the part of one carried on)
+        const int ms = (int)(skyCarry_ / 44100);
+        skyCarry_ %= 44100;
+        sky_.advance(in, ms);
+        for (int l = 0; l < kLogLines; ++l)   // a line's new text, where formatValue() finds it, before its serial is sent
+            if (sky_.logSerial(l) != logSeen_[l])
+            {
+                logSeen_[l] = sky_.logSerial(l);
+                publishLog(logSeen_[l] % kLogSlots, sky_.logText(l));
+            }
+    }
+
+    // The log's texts by serial (modulo kLogSlots), written on the audio thread and read by formatValue() on the
+    // MPC's: words under a sequence count (odd while a text is being written; a reader retries if it moved).
+    void publishLog(int slot, const char* text)
+    {
+        uint32_t w[kLogWords] = {};
+        std::memcpy(w, text, strnlen(text, tp::sky::kTextMax - 1));
+        const uint32_t s0 = logSeq_.load();
+        logSeq_.store(s0 + 1);
+        for (int i = 0; i < kLogWords; ++i) logText_[slot][i].store(w[i]);
+        logSeq_.store(s0 + 2);
+    }
+    std::string logLine(int slot) const
+    {
+        char t[tp::sky::kTextMax + 1] = {};
+        for (int tries = 0; tries < 8; ++tries)
+        {
+            const uint32_t s0 = logSeq_.load();
+            if (s0 & 1u) continue;
+            uint32_t w[kLogWords];
+            for (int i = 0; i < kLogWords; ++i) w[i] = logText_[slot][i].load();
+            if (logSeq_.load() != s0) continue;
+            std::memcpy(t, w, sizeof w);
+            break;
+        }
+        return t[0] != 0 ? t : " ";
+    }
+
+    // The display values now: the status line's, then the screen's, each within its range.
     struct Status { int v[kNumDisplay]; operator const int*() const { return v; } };
     Status status() const
     {
         using namespace tp::app;
-        return {{lastPad_, chordCode(), held() ? 1 : 0, locked() ? 1 : 0}};
+        Status s;
+        int* v = s.v;
+        v[kDPad] = lastPad_, v[kDChord] = chordCode(), v[kDHold] = held() ? 1 : 0, v[kDLock] = locked() ? 1 : 0;
+        v[kDSection] = section() + 1;
+        v[kDPhrase] = phraseBar() + 1;
+        v[kDEvolve] = evolveChance();
+        v[kDNext] = nextChordCode();
+        v[kDNextIn] = barsToNextChord();
+        const int pos = progPos(), count = progCount();
+        if (!loopMode()) v[kDProg] = 1 + walkCharacter() % EN_NWALK;
+        else v[kDProg] = pos < 0 || count < 1 ? 0 : 4 + pos * 8 + count - 1;
+        bool last = false;
+        const int dots = ringDots(&last);
+        v[kDRing] = dots < 0 ? 0 : (held() ? 67 : last ? 34 : 1) + (dots > 32 ? 32 : dots);
+        for (int i = 0; i < kSlots; ++i)
+        {
+            v[kDSlot + i] = i == pos ? 3 : (int)slotState(i);
+            v[kDSlotName + i] = slotChordCode(i);
+        }
+        for (int i = 0; i < kPucks; ++i)
+        {
+            const tp::sky::Puck p = sky_.puck(i);
+            v[kDPx + i] = (int)std::lround(p.x * (float)kPuckUnit);
+            v[kDPy + i] = (int)std::lround(p.y * (float)kPuckUnit);
+        }
+        for (int l = 0; l < kPlanets; ++l)
+        {
+            v[kDPlanet + l] = sky_.planetFrame(l);
+            const float d = filterDrift(l);   // (octaves; not a number: none)
+            v[kDDrift + l] = d >= 4.5f ? 45 : d <= -4.5f ? -45 : d == d ? (int)std::lround(d * 10.0f) : 0;
+        }
+        for (int l = 0; l < kLogLines; ++l) v[kDLog + l] = sky_.logSerial(l) % kLogSlots;
+        v[kDDensity] = densityShift();
+        const int lane = knobValue(kKnobLane);   // (ui.c lane_seq: lanes 1 and 3 are Sequence 2's)
+        v[kDStep] = playing() ? loopStep(lane == 1 || lane == 3 ? 1 : 0) : 16;
+        v[kDExt] = external() ? 1 : 0;
+        v[kDSource] = 0;
+        for (int k = 0; k < kNumDisplay; ++k)
+        {
+            const DispRange r = dispRange(k);
+            v[k] = v[k] < r.lo ? r.lo : v[k] > r.hi ? r.hi : v[k];
+        }
+        return s;
     }
 
-    // The status values that changed since they were last sent, to the MPC (it redraws only what it is
-    // told of). Returns how many were sent, at most `budget`.
-    // `frames`: the block's length, for the pace of corrections.
+    // Display value k as the MPC holds it now.
+    int shown(int k) const
+    {
+        const float plain = get(kDispPad + k);
+        return (int)std::lround(isPuck(k) ? plain * (float)kPuckUnit : plain);
+    }
+    // Display value k to the MPC (it redraws only what it is told of).
+    void put(int k, int v)
+    {
+        displaySent_[k].store(v, std::memory_order_release);   // (before the write: it comes back to parameterChanged)
+        sinceSent_[k] = 0;
+        const int i = kDispPad + k;
+        setNormalised(i, param(i).toNormalised(isPuck(k) ? (float)v / (float)kPuckUnit : (float)v));
+        notifyHostParameterChanged(i);
+    }
+
+    // The display values that changed since they were last sent, to the MPC, `budget` of them at most; returns how
+    // many. In this order: a value the MPC wrote over and the status line, the screen's texts and states, then the
+    // particles. The planets and the drifts go 10 times a second at most; half of the particles every 50 ms, the
+    // halves in turn, and only those that moved. What does not fit waits for the next block.
+    // `frames`: the block's length, which is the clock for all of this.
     int sendDisplay(const int* now, int budget, int frames)
     {
         sinceFix_ = sinceFix_ < kFixFrames ? sinceFix_ + frames : kFixFrames;
-        bool reset = displayReset_.exchange(false, std::memory_order_acq_rel);
+        if (displayReset_.exchange(false, std::memory_order_acq_rel))   // (a boot, a load: every value again)
+            for (std::atomic<int>& v : displaySent_) v.store(INT_MIN, std::memory_order_relaxed);
         if (sinceFix_ >= kFixFrames && displayFix_.exchange(false, std::memory_order_acq_rel))
         {   // (paced: should the MPC ever write back a rounded value, this must not run every block)
-            reset = true;
             sinceFix_ = 0;
+            for (int k = 0; k < kNumDisplay; ++k)
+                if (fixOne_[k].exchange(false, std::memory_order_acq_rel)) displaySent_[k].store(INT_MIN, std::memory_order_relaxed);
         }
-        if (reset)
-            for (std::atomic<int>& v : displaySent_) v.store(INT_MIN, std::memory_order_relaxed);
+        for (int& f : sinceSent_) f = f < kPaceFrames ? f + frames : kPaceFrames;
         int sent = 0;
         for (int k = 0; k < kNumDisplay && sent < budget; ++k)
         {
-            if (now[k] == displaySent_[k].load(std::memory_order_relaxed)) continue;
-            displaySent_[k].store(now[k], std::memory_order_release);
-            setNormalised(kDispPad + k, param(kDispPad + k).toNormalised((float)now[k]));
-            notifyHostParameterChanged(kDispPad + k);
+            const int was = displaySent_[k].load(std::memory_order_relaxed);
+            if (isPuck(k) || now[k] == was) continue;
+            if (isPaced(k) && was != INT_MIN && sinceSent_[k] < kPaceFrames) continue;
+            put(k, now[k]);
             ++sent;
         }
+        puckClock_ = puckClock_ < kPuckFrames ? puckClock_ + frames : kPuckFrames;
+        if (puckClock_ >= kPuckFrames)
+        {
+            bool all = true;   // (a half that did not fit whole keeps its turn)
+            for (int i = puckHalf_ * (kPucks / 2), end = i + kPucks / 2; i < end; ++i)
+            {
+                const bool x = puckMoved(now, kDPx + i), y = puckMoved(now, kDPy + i);
+                if (!x && !y) continue;
+                if (sent + (x ? 1 : 0) + (y ? 1 : 0) > budget)
+                {
+                    all = false;
+                    break;
+                }
+                if (x) put(kDPx + i, now[kDPx + i]), ++sent;
+                if (y) put(kDPy + i, now[kDPy + i]), ++sent;
+            }
+            if (all)
+            {
+                puckHalf_ ^= 1;
+                puckClock_ = 0;
+            }
+        }
         return sent;
+    }
+    bool puckMoved(const int* now, int k) const
+    {
+        const int was = displaySent_[k].load(std::memory_order_relaxed);
+        return was == INT_MIN || std::abs(now[k] - was) > kPuckMove;
+    }
+
+    // Another instance owns the engine: the Pad field says so, and every other display value rests. Only what the
+    // MPC does not hold already is sent: a new instance's one message, or a loaded project's values put to rest.
+    void sendBusy()
+    {
+        int sent = 0;
+        for (int k = 0; k < kNumDisplay && sent < kMaxSends; ++k)
+        {
+            const int want = k == kDPad ? kPadBusy : dispRange(k).rest;
+            if (shown(k) == want) continue;
+            put(k, want);
+            ++sent;
+        }
     }
 
     void addDisplay(mpc::Param p)
@@ -655,6 +1001,7 @@ private:
         addParam(p);
     }
 
+    // What the app changed by itself (a piece, Evolve, a shake, the engine's macros) back to the MPC.
     void mirror(int budget)
     {
         using namespace tp;
@@ -699,6 +1046,7 @@ private:
         snapSeq_.store(s0 + 2, std::memory_order_release);
     }
 
+    tp::sky::Sky sky_;
     tp::EngineLease lease_;
     std::atomic<bool> booted_{false};
     std::atomic<bool> hostKnows_{false};   // the MPC's values are this instance's (not a new instance's defaults)
@@ -711,10 +1059,20 @@ private:
     int mirrorFrom_ = 0;
     uint32_t settle_[tp::kNumControls] = {};   // (a switch keeps the MPC's value till this chunk)
     int lastPad_ = 0;     // (the status line's Pad: kPad*)
-    std::atomic<int> displaySent_[kNumDisplay] = {{INT_MIN}, {INT_MIN}, {INT_MIN}, {INT_MIN}};   // (INT_MIN: never)
-    std::atomic<bool> displayReset_{true};   // send every status value again (a boot, a load)
-    std::atomic<bool> displayFix_{false};    // the MPC wrote over a status value
+    std::atomic<int> displaySent_[kNumDisplay];   // each display value as last sent (INT_MIN: never, or to send again)
+    std::atomic<bool> displayReset_{true};   // send every display value again (a boot, a load)
+    std::atomic<bool> displayFix_{false};    // the MPC wrote over a display value: one of fixOne_
+    std::atomic<bool> fixOne_[kNumDisplay];
     int sinceFix_ = kFixFrames;
+    int sinceSent_[kNumDisplay] = {};        // frames since each was sent, up to kPaceFrames
+    int puckClock_ = 0, puckHalf_ = 0;       // frames since a half of the particles went; the half whose turn it is
+    int actionSends_ = 0;                    // one-shots sent back to Off in this block
+
+    // the star-chart screen's model, and the log's texts for formatValue()
+    long long skyCarry_ = 0;                 // the part of a millisecond not yet given to the Sky, in frames x 1000
+    int logSeen_[kLogLines] = {};            // each line's serial as published
+    std::atomic<uint32_t> logSeq_{0};
+    std::atomic<uint32_t> logText_[kLogSlots][kLogWords];
     int idxSync_ = 0, idxKeyMode_ = 0, idxPadBase_ = 0;
 
     // the notes held, and what each one's press did
