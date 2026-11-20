@@ -16,8 +16,8 @@ using tp::app::Event;
 
 namespace {
 
-constexpr int kStepMs = 16;                  // ui.c's frame: the orbits move once a frame
-constexpr float kSpin[2] = {0.06f, 0.045f};  // radians a step: the Sequence's (outer), Sequence 2's (inner)
+constexpr int kStepMs = 48;                  // ui.c moves the orbits in draw_main, every third 16 ms frame
+constexpr float kSpin[2] = {0.06f, 0.045f};  // radians a step: the Sequence's (inner orbit), Sequence 2's (outer)
 constexpr float kFade = 0.016f;              // life lost a step
 constexpr int kLifeSteps = 63;               // a hit's whole life (1 / 0.016, rounded up): any more steps park it
 constexpr double kTwoPi = 6.283185307179586;
@@ -339,10 +339,10 @@ void Sky::advance(const SkyInput& in, int ms)
         heard_[p] = in.heard[p];
     }
 
-    // the pucks move a step each 16 ms, only while playing (ui.c draw_orbits)
-    if (in.playing)
+    // the pucks move a step each 48 ms (ui.c draw_orbits, from draw_main's every third frame), stopped or not: after
+    // Stop the ones alive fade out; only launches stop
     {
-        tick_ms_ += ms;
+        tick_ms_ += ms < (1 << 20) ? ms : (1 << 20);
         const int steps = tick_ms_ / kStepMs;
         tick_ms_ %= kStepMs;
         for (int i = 0; i < kPucks && steps; i++)

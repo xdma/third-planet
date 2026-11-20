@@ -26,7 +26,7 @@ struct SkyInput
     int piece;
 };
 
-constexpr int kPucks = 8;            // 0..3 outer (Sequence), 4..7 inner (Sequence 2)
+constexpr int kPucks = 8;            // 0..3 Sequence (inner orbit), 4..7 Sequence 2 (outer), as ui.c ORB_RX0/RX1
 constexpr int kLogLines = 3;
 constexpr int kTextMax = 32;         // incl. NUL: 31 bytes of text
 constexpr int kPlanets = 5;          // Drone, Seq, Lead, Seq 2, Atmos (the mute layers)
@@ -52,7 +52,7 @@ private:
     struct Orb { float a, life; bool on; };
     Orb orb_[kPucks];
     uint32_t seen_hits_[2], seen_reps_[2];
-    int tick_ms_;                                     // ms toward the next 16 ms step
+    int tick_ms_;                                     // ms toward the next 48 ms step
     float act_[kPlanets];
     bool heard_[kPlanets];
     int flash_[tp::app::kNumNudge];

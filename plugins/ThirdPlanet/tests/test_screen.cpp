@@ -10,10 +10,10 @@
 //      nudges are "Evolve" with exactly the parameters nudge_tick moved on a phrase edge (also in the frame of a hand
 //      nudge, or of a panel knob turned), a piece change is one "Piece", and knobs, pads, boot, a loaded store and
 //      Motion log nothing; 100 events leave the newest 64, in order;
-//   7. the Sky model (sky.h): particles launch, move and park as ui.c's orbits do; planet frames follow activity,
-//      mutes and nudge flashes; the log keeps the newest three lines; every event formats within 31 bytes of valid
-//      UTF-8, the realistic ones whole; reset() clears it all; a hand nudge's or shake's burst shows the action
-//      newest and its two largest moves below it (ruling R11).
+//   7. the Sky model (sky.h): particles launch, move (a step each 48 ms, on after Stop) and park as ui.c's orbits
+//      do; planet frames follow activity, mutes and nudge flashes; the log keeps the newest three lines; every
+//      event formats within 31 bytes of valid UTF-8, the realistic ones whole; reset() clears it all; a hand
+//      nudge's or shake's burst shows the action newest and its two largest moves below it (ruling R11).
 //   c++ -std=c++17 -O2 -I plugins/ThirdPlanet/src -I deps/mpc-plugin-sdk/framework \
 //       plugins/ThirdPlanet/tests/test_screen.cpp plugins/ThirdPlanet/src/sky.cpp plugins/ThirdPlanet/src/app_unit.cpp \
 //       plugins/ThirdPlanet/src/engine_unit.cpp plugins/ThirdPlanet/src/power.cpp \
@@ -909,23 +909,28 @@ void particles_launch_and_park()
     SkyInput in = skyIn();
     s.advance(in, 0);
     CHECK(unparked(s, 0, 8) == 0, "parked at start");
-    // 4 hits on the Sequence, one a call: 4 outer pucks at 0.39 x (hits + reps)
+    // 4 hits on the Sequence, one a call: 4 inner-orbit pucks at 0.39 x (hits + reps)
     for (uint32_t h = 1; h <= 4; h++)
     {
         in.hits[0] = h;
         s.advance(in, 0);
     }
-    CHECK(unparked(s, 0, 4) == 4 && unparked(s, 4, 8) == 0, "4 outer pucks: %d, inner %d", unparked(s, 0, 4), unparked(s, 4, 8));
+    CHECK(unparked(s, 0, 4) == 4 && unparked(s, 4, 8) == 0, "4 Sequence pucks: %d, Sequence 2 %d", unparked(s, 0, 4), unparked(s, 4, 8));
     for (int k = 0; k < 4; k++)
         CHECK(at(s.puck(k), 0.39 * (k + 1)), "puck %d at %.3f: %.4f %.4f", k, 0.39 * (k + 1), s.puck(k).x, s.puck(k).y);
-    // a 16 ms step: each 0.06 on (the outer orbit)
-    s.advance(in, 16);
+    // 47 ms: no step; 48 ms: each 0.06 on (the Sequence's)
+    s.advance(in, 47);
+    for (int k = 0; k < 4; k++)
+        CHECK(at(s.puck(k), 0.39 * (k + 1)), "puck %d not yet a step", k);
+    s.advance(in, 1);
     for (int k = 0; k < 4; k++)
         CHECK(at(s.puck(k), 0.39 * (k + 1) + 0.06), "puck %d one step on", k);
-    // 1100 ms with no hits, a little at a time: all parked
-    for (int t = 0; t < 110; t++)
-        s.advance(in, 10);
-    CHECK(unparked(s, 0, 8) == 0, "parked after 1100 ms: %d", unparked(s, 0, 8));
+    // a hit lives 63 steps (about 3 s): alive at step 62, parked at 63, a little at a time
+    for (int t = 0; t < 61 * 48 / 8; t++)
+        s.advance(in, 8);
+    CHECK(unparked(s, 0, 4) == 4, "alive after 62 steps: %d", unparked(s, 0, 4));
+    s.advance(in, 48);
+    CHECK(unparked(s, 0, 8) == 0, "parked after 63 steps (3024 ms): %d", unparked(s, 0, 8));
 
     // 10 hits in one call: 3 launched (the counts 5, 6, 7), the rest still counted for the next angle
     in.hits[0] = 14;
@@ -933,7 +938,7 @@ void particles_launch_and_park()
     CHECK(unparked(s, 0, 4) == 3, "3 a call: %d", unparked(s, 0, 4));
     for (int k = 0; k < 3; k++)
         CHECK(at(s.puck(k), 0.39 * (5 + k)), "capped puck %d", k);
-    s.advance(in, 16);
+    s.advance(in, 48);
     in.hits[0] = 15;
     s.advance(in, 0);
     CHECK(at(s.puck(3), 0.39 * 15), "the skipped hits count: puck 3 at 0.39 x 15");
@@ -943,21 +948,21 @@ void particles_launch_and_park()
     CHECK(at(s.puck(0), 0.39 * 16), "the oldest puck reused");
     CHECK(at(s.puck(1), 0.39 * 6 + 0.06) && at(s.puck(2), 0.39 * 7 + 0.06) && at(s.puck(3), 0.39 * 15), "the others kept");
 
-    // Sequence 2: the inner orbit, 3 rad on, 0.045 a step
+    // Sequence 2: the outer orbit, 3 rad on, 0.045 a step
     Sky s2;
     SkyInput i2 = skyIn();
     i2.hits[1] = 1;
     s2.advance(i2, 0);
-    CHECK(unparked(s2, 0, 4) == 0 && unparked(s2, 4, 8) == 1 && at(s2.puck(4), 0.39 + 3.0), "inner launch");
-    s2.advance(i2, 32);
-    CHECK(at(s2.puck(4), 0.39 + 3.0 + 2 * 0.045), "inner: 0.045 a step");
+    CHECK(unparked(s2, 0, 4) == 0 && unparked(s2, 4, 8) == 1 && at(s2.puck(4), 0.39 + 3.0), "Sequence 2 launch");
+    s2.advance(i2, 96);
+    CHECK(at(s2.puck(4), 0.39 + 3.0 + 2 * 0.045), "Sequence 2: 0.045 a step");
     // a repeat: life 0.55 (34 steps on, parked at the 35th), at 0.39 x (hits + reps)
     i2.reps[1] = 1;
     s2.advance(i2, 0);
     CHECK(unparked(s2, 4, 8) == 2 && at(s2.puck(5), 0.39 * 2 + 3.0), "repeat launched at 0.39 x 2 + 3");
-    s2.advance(i2, 34 * 16);
+    s2.advance(i2, 34 * 48);
     CHECK(!parked(s2.puck(5)), "a repeat lives 34 steps");
-    s2.advance(i2, 16);
+    s2.advance(i2, 48);
     CHECK(parked(s2.puck(5)) && !parked(s2.puck(4)), "a repeat parks at 35 steps, the hit lives on");
     // repeats: 2 a call
     i2.reps[1] = 11;
@@ -979,23 +984,26 @@ void particles_launch_and_park()
     s3.advance(i3, 0);
     CHECK(unparked(s3, 0, 4) == 1 && at(s3.puck(0), 0.39 * 4) && unparked(s3, 4, 8) == 1, "heard again: from its count");
 
-    // not playing: nothing moves, nothing launches
+    // stopped (ruling R13): no launches, but the pucks alive go on moving and fading till their life ends
     i3.playing = false;
-    const Puck before = s3.puck(0);
     i3.hits[0] = 6;
     i3.heard[3] = true;
     i3.hits[1] = 3;
-    s3.advance(i3, 500);
-    CHECK(s3.puck(0).x == before.x && s3.puck(0).y == before.y, "stopped: still");
+    s3.advance(i3, 48);
     CHECK(unparked(s3, 0, 4) == 1 && unparked(s3, 4, 8) == 1, "stopped: no launches");
+    CHECK(at(s3.puck(0), 0.39 * 4 + 0.06) && at(s3.puck(4), 0.39 + 3.0 + 0.045), "stopped: still moving");
+    s3.advance(i3, 60 * 48);
+    CHECK(at(s3.puck(0), 0.39 * 4 + 61 * 0.06) && unparked(s3, 0, 8) == 2, "stopped: moving 61 steps on");
+    s3.advance(i3, 2 * 48);
+    CHECK(unparked(s3, 0, 8) == 0, "stopped: parked at the end of their life: %d", unparked(s3, 0, 8));
     // a counter that goes back (a new boot) launches nothing and does not spin
     i3.playing = true;
     i3.hits[0] = 0;
     s3.advance(i3, 0);
-    CHECK(unparked(s3, 0, 4) == 1, "counter back: no launches");
+    CHECK(unparked(s3, 0, 4) == 0, "counter back: no launches");
     i3.hits[0] = 1;
     s3.advance(i3, 0);
-    CHECK(unparked(s3, 0, 4) == 2, "counter back: then from there");
+    CHECK(unparked(s3, 0, 4) == 1 && at(s3.puck(0), 0.39 * 1), "counter back: then from there");
 }
 
 void planet_frames()
