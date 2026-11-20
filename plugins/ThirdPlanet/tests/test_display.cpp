@@ -477,6 +477,11 @@ void budgetPerBlock()
         char what[48];
         std::snprintf(what, sizeof what, "budget_per_block (%d)", bs);
         lag.check(bs, what);
+        std::string still;   // (what this run never moved is checked by its texts and range only)
+        const std::vector<std::string> ids = displayIds();
+        for (int k = 0; k < xCount; ++k)
+            if (lag.seen[k].size() < 2) still += " " + ids[(size_t)k];
+        std::printf("  never changed:%s\n", still.empty() ? " none" : still.c_str());
     }
 }
 

@@ -60,6 +60,7 @@ int main()
     run(2.0);
     CHECK(tp::app::playing(), "the MPC plays: the piece did not start");
     CHECK(tp::app::external(), "the MPC plays: not on the external clock");
+    CHECK(fx->getParameter(fx, kDispPad + kDExt) == 1.0f, "the MPC plays: the screen does not show EXT");
     const uint32_t bars0 = en_bars;
     run(2.0);                              // 2 s at 120 BPM = 4 beats = 16 sixteenths
     CHECK(en_bars - bars0 >= 15 && en_bars - bars0 <= 17, "2 s at 120 BPM gave %u sixteenths, not 16", en_bars - bars0);
@@ -78,6 +79,7 @@ int main()
     run(2.0);
     CHECK(tp::app::playing(), "Sync off while playing: the piece stopped");
     CHECK(!tp::app::external(), "Sync off: still on the external clock");
+    CHECK(fx->getParameter(fx, kDispPad + kDExt) == 0.0f, "Sync off: the screen still shows EXT");
 
     fx->setParameter(fx, iSync, 1.0f);
     ti.flags &= ~kVstTransportPlaying;
