@@ -9,11 +9,15 @@
 //   6. the event ring (takeEvents): a hand nudge and a shake are "You" with the parameters they moved, Evolve's
 //      nudges are "Evolve" with exactly the parameters nudge_tick moved on a phrase edge (also in the frame of a hand
 //      nudge, or of a panel knob turned), a piece change is one "Piece", and knobs, pads, boot, a loaded store and
-//      Motion log nothing; 100 events leave the newest 64, in order.
+//      Motion log nothing; 100 events leave the newest 64, in order;
+//   7. the Sky model (sky.h): particles launch, move and park as ui.c's orbits do; planet frames follow activity,
+//      mutes and nudge flashes; the log keeps the newest three lines; every event formats within 31 bytes of valid
+//      UTF-8, the realistic ones whole; reset() clears it all.
 //   c++ -std=c++17 -O2 -I plugins/ThirdPlanet/src -I deps/mpc-plugin-sdk/framework \
-//       plugins/ThirdPlanet/tests/test_screen.cpp plugins/ThirdPlanet/src/app_unit.cpp \
+//       plugins/ThirdPlanet/tests/test_screen.cpp plugins/ThirdPlanet/src/sky.cpp plugins/ThirdPlanet/src/app_unit.cpp \
 //       plugins/ThirdPlanet/src/engine_unit.cpp plugins/ThirdPlanet/src/power.cpp \
 //       -o plugins/ThirdPlanet/build/tests/test_screen
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -23,6 +27,7 @@
 
 #include "app_api.h"
 #include "engine.h"
+#include "sky.h"
 
 using namespace tp::app;
 
@@ -852,6 +857,414 @@ void overflow()
     CHECK(takeEvents(e, 64) == 6 && e[0].layer == 4 && e[1].layer == 0 && e[1].to == 0, "take the rest");
 }
 
+// --- 7. the Sky model ---------------------------------------------------------------------------------------------
+
+using tp::sky::Puck;
+using tp::sky::Sky;
+using tp::sky::SkyInput;
+
+SkyInput skyIn()
+{
+    SkyInput in{};
+    in.playing = true;
+    for (int l = 0; l < 5; l++)
+        in.heard[l] = true;
+    return in;
+}
+bool parked(Puck p) { return p.x == 0.5f && p.y == 0.5f; }
+bool at(Puck p, double a)
+{
+    return std::fabs(p.x - (0.5 + 0.5 * std::cos(a))) < 1e-3 && std::fabs(p.y - (0.5 + 0.5 * std::sin(a))) < 1e-3;
+}
+int unparked(const Sky& s, int from, int to)
+{
+    int n = 0;
+    for (int i = from; i < to; i++)
+        n += !parked(s.puck(i));
+    return n;
+}
+Event ev(Who who, What what, int layer = -1, int param = -1, int from = 0, int to = 0)
+{
+    return Event{who, what, (int8_t)layer, (int16_t)param, (int16_t)from, (int16_t)to};
+}
+void feed(Sky& s, SkyInput in, std::vector<Event> e, int ms = 0)
+{
+    in.events = e.data();
+    in.numEvents = (int)e.size();
+    s.advance(in, ms);
+}
+std::string fmt(const Event& e, int piece = 0)
+{
+    char b[tp::sky::kTextMax];
+    const int n = tp::sky::formatEvent(e, b, piece);
+    CHECK(n == (int)std::strlen(b), "formatEvent's length %d vs %d", n, (int)std::strlen(b));
+    return b;
+}
+
+void particles_launch_and_park()
+{
+    Sky s;
+    SkyInput in = skyIn();
+    s.advance(in, 0);
+    CHECK(unparked(s, 0, 8) == 0, "parked at start");
+    // 4 hits on the Sequence, one a call: 4 outer pucks at 0.39 x (hits + reps)
+    for (uint32_t h = 1; h <= 4; h++)
+    {
+        in.hits[0] = h;
+        s.advance(in, 0);
+    }
+    CHECK(unparked(s, 0, 4) == 4 && unparked(s, 4, 8) == 0, "4 outer pucks: %d, inner %d", unparked(s, 0, 4), unparked(s, 4, 8));
+    for (int k = 0; k < 4; k++)
+        CHECK(at(s.puck(k), 0.39 * (k + 1)), "puck %d at %.3f: %.4f %.4f", k, 0.39 * (k + 1), s.puck(k).x, s.puck(k).y);
+    // a 16 ms step: each 0.06 on (the outer orbit)
+    s.advance(in, 16);
+    for (int k = 0; k < 4; k++)
+        CHECK(at(s.puck(k), 0.39 * (k + 1) + 0.06), "puck %d one step on", k);
+    // 1100 ms with no hits, a little at a time: all parked
+    for (int t = 0; t < 110; t++)
+        s.advance(in, 10);
+    CHECK(unparked(s, 0, 8) == 0, "parked after 1100 ms: %d", unparked(s, 0, 8));
+
+    // 10 hits in one call: 3 launched (the counts 5, 6, 7), the rest still counted for the next angle
+    in.hits[0] = 14;
+    s.advance(in, 0);
+    CHECK(unparked(s, 0, 4) == 3, "3 a call: %d", unparked(s, 0, 4));
+    for (int k = 0; k < 3; k++)
+        CHECK(at(s.puck(k), 0.39 * (5 + k)), "capped puck %d", k);
+    s.advance(in, 16);
+    in.hits[0] = 15;
+    s.advance(in, 0);
+    CHECK(at(s.puck(3), 0.39 * 15), "the skipped hits count: puck 3 at 0.39 x 15");
+    // full orbit: the oldest (least life; of equals, the first) is taken, not the newest
+    in.hits[0] = 16;
+    s.advance(in, 0);
+    CHECK(at(s.puck(0), 0.39 * 16), "the oldest puck reused");
+    CHECK(at(s.puck(1), 0.39 * 6 + 0.06) && at(s.puck(2), 0.39 * 7 + 0.06) && at(s.puck(3), 0.39 * 15), "the others kept");
+
+    // Sequence 2: the inner orbit, 3 rad on, 0.045 a step
+    Sky s2;
+    SkyInput i2 = skyIn();
+    i2.hits[1] = 1;
+    s2.advance(i2, 0);
+    CHECK(unparked(s2, 0, 4) == 0 && unparked(s2, 4, 8) == 1 && at(s2.puck(4), 0.39 + 3.0), "inner launch");
+    s2.advance(i2, 32);
+    CHECK(at(s2.puck(4), 0.39 + 3.0 + 2 * 0.045), "inner: 0.045 a step");
+    // a repeat: life 0.55 (34 steps on, parked at the 35th), at 0.39 x (hits + reps)
+    i2.reps[1] = 1;
+    s2.advance(i2, 0);
+    CHECK(unparked(s2, 4, 8) == 2 && at(s2.puck(5), 0.39 * 2 + 3.0), "repeat launched at 0.39 x 2 + 3");
+    s2.advance(i2, 34 * 16);
+    CHECK(!parked(s2.puck(5)), "a repeat lives 34 steps");
+    s2.advance(i2, 16);
+    CHECK(parked(s2.puck(5)) && !parked(s2.puck(4)), "a repeat parks at 35 steps, the hit lives on");
+    // repeats: 2 a call
+    i2.reps[1] = 11;
+    s2.advance(i2, 0);
+    CHECK(unparked(s2, 4, 8) == 3, "2 repeats a call: %d", unparked(s2, 4, 8));
+
+    // a muted layer launches none (its counts still taken); the other sequence does
+    Sky s3;
+    SkyInput i3 = skyIn();
+    i3.heard[1] = false;
+    i3.hits[0] = 3;
+    i3.hits[1] = 1;
+    s3.advance(i3, 0);
+    CHECK(unparked(s3, 0, 4) == 0 && unparked(s3, 4, 8) == 1, "muted Sequence: none (%d)", unparked(s3, 0, 4));
+    i3.heard[1] = true;
+    i3.heard[3] = false;
+    i3.hits[0] = 4;
+    i3.hits[1] = 2;
+    s3.advance(i3, 0);
+    CHECK(unparked(s3, 0, 4) == 1 && at(s3.puck(0), 0.39 * 4) && unparked(s3, 4, 8) == 1, "heard again: from its count");
+
+    // not playing: nothing moves, nothing launches
+    i3.playing = false;
+    const Puck before = s3.puck(0);
+    i3.hits[0] = 6;
+    i3.heard[3] = true;
+    i3.hits[1] = 3;
+    s3.advance(i3, 500);
+    CHECK(s3.puck(0).x == before.x && s3.puck(0).y == before.y, "stopped: still");
+    CHECK(unparked(s3, 0, 4) == 1 && unparked(s3, 4, 8) == 1, "stopped: no launches");
+    // a counter that goes back (a new boot) launches nothing and does not spin
+    i3.playing = true;
+    i3.hits[0] = 0;
+    s3.advance(i3, 0);
+    CHECK(unparked(s3, 0, 4) == 1, "counter back: no launches");
+    i3.hits[0] = 1;
+    s3.advance(i3, 0);
+    CHECK(unparked(s3, 0, 4) == 2, "counter back: then from there");
+}
+
+void planet_frames()
+{
+    Sky s;
+    SkyInput in = skyIn();
+    in.act[1] = 0.5f;
+    s.advance(in, 0);
+    CHECK(s.planetFrame(1) == 12, "heard, 0.5: %d", s.planetFrame(1));
+    in.heard[1] = false;
+    s.advance(in, 16);
+    CHECK(s.planetFrame(1) == 13, "muted: %d", s.planetFrame(1));
+    in.heard[1] = true;
+    feed(s, in, {ev(kWhoYou, kEvNudge, 1)});
+    CHECK(s.planetFrame(1) == 14 && s.flash(1) == 600, "nudge: %d (%d ms)", s.planetFrame(1), s.flash(1));
+    s.advance(in, 599);
+    CHECK(s.planetFrame(1) == 14, "599 ms on: still the flash");
+    s.advance(in, 1);
+    CHECK(s.planetFrame(1) == 12 && s.flash(1) == 0, "after 600 ms: %d", s.planetFrame(1));
+    // a flash shows over a mute
+    in.heard[1] = false;
+    feed(s, in, {ev(kWhoYou, kEvShake, 1)});
+    CHECK(s.planetFrame(1) == 14, "shake over a mute: %d", s.planetFrame(1));
+    s.advance(in, 600);
+    CHECK(s.planetFrame(1) == 13, "then muted");
+    // Evolve's nudges are kEvParam only; nudge layer 5 is planet 4 (Atmos); the Space (4) has no planet
+    in.heard[1] = true;
+    feed(s, in, {ev(kWhoEvolve, kEvParam, 5, P_NCOL, 0, 3)});
+    CHECK(s.flash(5) == 600 && s.planetFrame(4) == 2, "Evolve on the Atmosphere: planet 4 frame %d", s.planetFrame(4));
+    s.advance(in, 600);
+    feed(s, in, {ev(kWhoEvolve, kEvParam, 4, P_ECHO, 50, 52)});
+    CHECK(s.flash(4) == 600, "the Space's flash");
+    for (int p = 0; p < 5; p++)
+        CHECK(s.planetFrame(p) % 3 != 2, "the Space flashes no planet (%d)", p);
+    s.advance(in, 600);
+    // shake all: Drone, Seq, Lead, Seq 2, Atmos, not the Space
+    feed(s, in, {ev(kWhoYou, kEvShakeAll)});
+    for (int l = 0; l < 6; l++)
+        CHECK((s.flash(l) == 600) == (l != 4), "shake all: layer %d %d ms", l, s.flash(l));
+    for (int p = 0; p < 5; p++)
+        CHECK(s.planetFrame(p) % 3 == 2, "shake all: planet %d", p);
+    s.advance(in, 600);
+    // mutes, solos and the rest flash nothing
+    feed(s, in, {ev(kWhoYou, kEvMute, 1, -1, 0, 1), ev(kWhoYou, kEvSolo, 2, -1, 0, 1), ev(kWhoYou, kEvNextChord),
+                 ev(kWhoYou, kEvReset), ev(kWhoPiece, kEvPiece, -1, -1, 0, 3)});
+    for (int l = 0; l < 6; l++)
+        CHECK(s.flash(l) == 0, "no flash on layer %d", l);
+    // a burst: every event's flash, not only the three the log keeps
+    std::vector<Event> burst = {ev(kWhoYou, kEvNudge, 0)};
+    for (int i = 0; i < 5; i++)
+        burst.push_back(ev(kWhoYou, kEvParam, 3, P_S2CUT, i, i + 1));
+    burst[3] = ev(kWhoEvolve, kEvParam, 2, P_VIB, 3, 4);
+    feed(s, in, burst);
+    CHECK(s.flash(0) == 600 && s.flash(2) == 600 && s.flash(3) == 600 && s.flash(1) == 0, "burst flashes");
+    // levels: floor(act x 8), at most 7
+    const float acts[] = {0.0f, 0.124f, 0.125f, 0.99f, 1.0f, 2.0f, -1.0f, NAN};
+    const int levels[] = {0, 0, 1, 7, 7, 7, 0, 0};
+    for (int i = 0; i < 8; i++)
+    {
+        in.act[0] = acts[i];
+        s.advance(in, 600);
+        CHECK(s.planetFrame(0) == levels[i] * 3, "act %g: frame %d", acts[i], s.planetFrame(0));
+    }
+    CHECK(s.planetFrame(-1) == 0 && s.planetFrame(5) == 0 && s.flash(-1) == 0 && s.flash(6) == 0, "out of range");
+}
+
+void log_order_and_fit()
+{
+    Sky s;
+    SkyInput in = skyIn();
+    s.advance(in, 0);
+    for (int l = 0; l < 3; l++)
+        CHECK(std::strcmp(s.logText(l), "") == 0, "empty line %d", l);
+    const std::vector<Event> five = {ev(kWhoYou, kEvNextChord), ev(kWhoYou, kEvNewChords), ev(kWhoYou, kEvForget),
+                                     ev(kWhoYou, kEvHold, -1, -1, 0, 1), ev(kWhoYou, kEvLock, -1, -1, 0, 1)};
+    feed(s, in, five);
+    CHECK(std::string(s.logText(0)) == "You › Lock on", "line 0: %s", s.logText(0));
+    CHECK(std::string(s.logText(1)) == "You › Hold on", "line 1: %s", s.logText(1));
+    CHECK(std::string(s.logText(2)) == "You › Forget Lead", "line 2: %s", s.logText(2));
+    CHECK(s.logSerial(0) != s.logSerial(1) && s.logSerial(1) != s.logSerial(2) && s.logSerial(0) != s.logSerial(2), "serials");
+    // the same five in two calls: the same lines; each shift changes the serials
+    Sky t;
+    feed(t, in, {five[0], five[1], five[2]});
+    CHECK(std::string(t.logText(0)) == "You › Forget Lead" && std::string(t.logText(2)) == "You › Next chord", "3 in");
+    int ser[3];
+    for (int l = 0; l < 3; l++)
+        ser[l] = t.logSerial(l);
+    feed(t, in, {five[3]});
+    CHECK(std::string(t.logText(1)) == "You › Forget Lead" && std::string(t.logText(2)) == "You › New chords", "shifted");
+    for (int l = 0; l < 3; l++)
+        CHECK(t.logSerial(l) != ser[l], "line %d's serial changed with its text", l);
+    for (int l = 0; l < 3; l++)
+        ser[l] = t.logSerial(l);
+    t.advance(in, 100);
+    for (int l = 0; l < 3; l++)
+        CHECK(t.logSerial(l) == ser[l], "no event: serial %d kept", l);
+    feed(t, in, {five[4]});
+    for (int l = 0; l < 3; l++)
+        CHECK(std::string(t.logText(l)) == s.logText(l), "two calls, line %d: %s", l, t.logText(l));
+    CHECK(std::strcmp(t.logText(3), "") == 0 && std::strcmp(t.logText(-1), "") == 0, "out of range");
+
+    // the wording (spec section 10, rulings R8, R9)
+    const int reed = 6;   // EN_BV_NAME: "FM Reed"
+    CHECK(fmt(ev(kWhoEvolve, kEvParam, 1, P_CUTOFF, 40, 46)) == "Evolve › Seq Cutoff +6", "%s", fmt(ev(kWhoEvolve, kEvParam, 1, P_CUTOFF, 40, 46)).c_str());
+    CHECK(fmt(ev(kWhoYou, kEvParam, 5, P_NCOL, 3, -9)) == "You › Atmos Tone −12", "%s", fmt(ev(kWhoYou, kEvParam, 5, P_NCOL, 3, -9)).c_str());
+    CHECK(fmt(ev(kWhoYou, kEvVoice, 2, P_LVOICE, 0, reed)) == "You › Shake Lead FM Reed", "%s", fmt(ev(kWhoYou, kEvVoice, 2, P_LVOICE, 0, reed)).c_str());
+    CHECK(fmt(ev(kWhoYou, kEvVoice, 4, P_ETIME, 2, 3)) == "You › Shake Space 1/4.", "%s", fmt(ev(kWhoYou, kEvVoice, 4, P_ETIME, 2, 3)).c_str());
+    CHECK(fmt(ev(kWhoPiece, kEvPiece, -1, -1, 0, 2)) == "Piece › Phaedra", "%s", fmt(ev(kWhoPiece, kEvPiece, -1, -1, 0, 2)).c_str());
+    CHECK(fmt(ev(kWhoYou, kEvReset), 8) == "Piece › Sakura Rain", "reset: %s", fmt(ev(kWhoYou, kEvReset), 8).c_str());
+    CHECK(fmt(ev(kWhoYou, kEvNextChord)) == "You › Next chord", "next chord");
+    CHECK(fmt(ev(kWhoYou, kEvNewChords)) == "You › New chords", "new chords");
+    CHECK(fmt(ev(kWhoYou, kEvShakeAll)) == "You › Shake all", "shake all");
+    CHECK(fmt(ev(kWhoYou, kEvHold, -1, -1, 1, 0)) == "You › Hold off", "hold off");
+    CHECK(fmt(ev(kWhoYou, kEvLock, -1, -1, 1, 0)) == "You › Lock off", "lock off");
+    CHECK(fmt(ev(kWhoYou, kEvPlay, -1, -1, 0, 1)) == "You › Play", "play");
+    CHECK(fmt(ev(kWhoYou, kEvPlay, -1, -1, 1, 0)) == "You › Stop", "stop");
+    CHECK(fmt(ev(kWhoYou, kEvMute, 4, -1, 0, 1)) == "You › Mute Atmos", "%s", fmt(ev(kWhoYou, kEvMute, 4, -1, 0, 1)).c_str());
+    CHECK(fmt(ev(kWhoYou, kEvMute, 1, -1, 1, 0)) == "You › Unmute Seq", "unmute");
+    CHECK(fmt(ev(kWhoYou, kEvSolo, 3, -1, 0, 1)) == "You › Solo Seq 2", "solo");
+    CHECK(fmt(ev(kWhoYou, kEvSolo, 0, -1, 1, 0)) == "You › Unsolo Drone", "unsolo");
+    CHECK(fmt(ev(kWhoYou, kEvNudge, 4)) == "You › Nudge Space", "%s", fmt(ev(kWhoYou, kEvNudge, 4)).c_str());
+    CHECK(fmt(ev(kWhoYou, kEvShake, 5)) == "You › Shake Atmos", "shake");
+    // the log uses the piece the input names
+    Sky r;
+    SkyInput ri = skyIn();
+    ri.piece = 9;
+    feed(r, ri, {ev(kWhoYou, kEvReset)});
+    CHECK(std::string(r.logText(0)) == "Piece › Umeda", "reset line: %s", r.logText(0));
+}
+
+// Valid UTF-8, printable, and only ASCII or the screen's glyphs (− ± · › » •).
+bool cleanText(const std::string& t)
+{
+    for (size_t i = 0; i < t.size();)
+    {
+        const unsigned char c = (unsigned char)t[i];
+        if (c < 0x80)
+        {
+            if (c < 0x20 || c == 0x7f) return false;
+            i++;
+            continue;
+        }
+        int n = (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3 : 0;
+        if (!n || i + n > t.size()) return false;
+        uint32_t cp = c & (n == 2 ? 0x1F : 0x0F);
+        for (int k = 1; k < n; k++)
+        {
+            const unsigned char d = (unsigned char)t[i + k];
+            if ((d & 0xC0) != 0x80) return false;
+            cp = cp << 6 | (d & 0x3F);
+        }
+        if (cp != 0x2212 && cp != 0xB1 && cp != 0xB7 && cp != 0x203A && cp != 0xBB && cp != 0x2022) return false;
+        i += n;
+    }
+    return true;
+}
+
+void every_format_fits()
+{
+    const int lims[] = {-32768, -1, 0, 1, 100, 32767};
+    const int layers[] = {-128, -1, 0, 1, 2, 3, 4, 5, 6, 127};
+    long n = 0, bad = 0;
+    for (int who = 0; who <= 3; who++)
+        for (int what = 0; what <= 15; what++)
+            for (int layer : layers)
+                for (int param = -2; param <= P_NPARAMS + 1; param++)
+                {
+                    // kEvParam and kEvVoice use the parameter; the rest are the same for every one: a few suffice
+                    if (what != kEvParam && what != kEvVoice && param > 2) continue;
+                    std::vector<std::pair<int, int>> ft;
+                    for (int f : lims)
+                        for (int t : lims)
+                            ft.push_back({f, t});
+                    if (param >= 0 && param < P_NPARAMS)
+                        for (int v = en_param_info(param)->lo; v <= en_param_info(param)->hi && v - en_param_info(param)->lo < 40; v++)
+                            ft.push_back({en_param_info(param)->lo, v});
+                    for (int pc = 0; pc < EN_NPIECES; pc++)
+                        ft.push_back({0, pc});
+                    for (auto [f, t] : ft)
+                        for (int piece : {-1, 0, 4, 8, EN_NPIECES})
+                        {
+                            if (what != kEvReset && piece != 0) continue;
+                            char b[tp::sky::kTextMax + 8];
+                            std::memset(b, 'X', sizeof b);
+                            const Event e = ev((Who)who, (What)what, layer, param, f, t);
+                            const int len = tp::sky::formatEvent(e, b, piece);
+                            n++;
+                            const bool ok = len >= 0 && len <= 31 && (int)std::strlen(b) == len && cleanText(b) &&
+                                            b[tp::sky::kTextMax] == 'X';
+                            if (!ok && bad++ < 10)
+                                CHECK(false, "who %d what %d layer %d param %d %d->%d piece %d: %d \"%s\"", who, what, layer,
+                                      param, f, t, piece, len, b);
+                        }
+                }
+    CHECK(bad == 0 && n > 100000, "%ld of %ld formats bad", bad, n);
+
+    // the realistic lines come out whole: each nudge layer's values (ui.c NUDGE_PAR) moved by up to 100, by either
+    static const char* const LAYER[6] = {"Drone", "Seq", "Lead", "Seq 2", "Space", "Atmos"};
+    static const int PAR[6][4] = {{P_CATT, P_CCOL, P_CRES, P_DREL},   {P_CUTOFF, P_DECAY, P_SACCENT, P_SACCENT},
+                                  {P_LTONE, P_LATT, P_VIB, P_GLIDE},  {P_S2CUT, P_S2DEC, P_S2CUT, P_S2DEC},
+                                  {P_ECHO, P_FEEDBACK, P_REVERB, P_SIZE}, {P_NCOL, P_NGRAIN, P_NTUNE, P_NROOM}};
+    static const int MORE[3][2] = {{0, P_PHASER}, {0, P_PEDAL}, {4, P_CLOUD}};
+    std::vector<std::pair<int, int>> lp;
+    for (int l = 0; l < 6; l++)
+        for (int j = 0; j < 4; j++)
+            lp.push_back({l, PAR[l][j]});
+    for (auto& m : MORE)
+        lp.push_back({m[0], m[1]});
+    for (auto [l, p] : lp)
+    {
+        CHECK(std::strlen(tp::sky::shortName(p)) >= 3, "short name of %d: \"%s\"", p, tp::sky::shortName(p));
+        for (Who who : {kWhoYou, kWhoEvolve})
+        {
+            const std::string head = std::string(who == kWhoYou ? "You" : "Evolve") + " › " + LAYER[l] + " " + tp::sky::shortName(p);
+            CHECK(fmt(ev(who, kEvParam, l, p, 0, 100)) == head + " +100", "whole: %s", fmt(ev(who, kEvParam, l, p, 0, 100)).c_str());
+            CHECK(fmt(ev(who, kEvParam, l, p, 100, 0)) == head + " −100", "whole: %s", fmt(ev(who, kEvParam, l, p, 100, 0)).c_str());
+        }
+    }
+    // every voice a shake can pick, and every piece, whole
+    static const int VOICE[6] = {P_CVOICE, P_SVOICE, P_LVOICE, P_S2VOICE, P_ETIME, P_NCHAR};
+    for (int l = 0; l < 6; l++)
+        for (int v = en_param_info(VOICE[l])->lo; v <= en_param_info(VOICE[l])->hi; v++)
+        {
+            char t[16];
+            en_param_text(VOICE[l], v, t);
+            const std::string want = std::string("You › Shake ") + LAYER[l] + " " + t;
+            CHECK(fmt(ev(kWhoYou, kEvVoice, l, VOICE[l], 0, v)) == want, "voice whole: %s", want.c_str());
+        }
+    for (int pc = 0; pc < EN_NPIECES; pc++)
+    {
+        CHECK(fmt(ev(kWhoPiece, kEvPiece, -1, -1, 0, pc)) == std::string("Piece › ") + en_piece_name(pc), "piece %d", pc);
+        CHECK(fmt(ev(kWhoYou, kEvReset), pc) == std::string("Piece › ") + en_piece_name(pc), "reset %d", pc);
+    }
+    for (int p = 0; p < P_NPARAMS; p++)
+        CHECK(std::strlen(tp::sky::shortName(p)) >= 2 && cleanText(tp::sky::shortName(p)), "short name %d", p);
+    CHECK(std::strcmp(tp::sky::shortName(-1), "") == 0 && std::strcmp(tp::sky::shortName(P_NPARAMS), "") == 0, "short name range");
+}
+
+void reset_clears()
+{
+    Sky s;
+    SkyInput in = skyIn();
+    in.act[2] = 1.0f;
+    in.hits[0] = 2;
+    in.hits[1] = 1;
+    std::vector<Event> e = {ev(kWhoYou, kEvShakeAll), ev(kWhoYou, kEvNextChord), ev(kWhoYou, kEvForget)};
+    feed(s, in, e);
+    CHECK(unparked(s, 0, 8) == 3 && s.flash(0) == 600 && std::strlen(s.logText(2)) > 0, "set up");
+    std::set<int> seen;
+    for (int l = 0; l < 3; l++)
+        seen.insert(s.logSerial(l));
+    s.reset();
+    CHECK(unparked(s, 0, 8) == 0, "reset: parked");
+    for (int l = 0; l < 6; l++)
+        CHECK(s.flash(l) == 0, "reset: flash %d", l);
+    for (int p = 0; p < 5; p++)
+        CHECK(s.planetFrame(p) == 0, "reset: planet %d frame %d", p, s.planetFrame(p));
+    for (int l = 0; l < 3; l++)
+    {
+        CHECK(std::strcmp(s.logText(l), "") == 0, "reset: line %d empty", l);
+        CHECK(!seen.count(s.logSerial(l)), "reset: line %d's serial new", l);
+        seen.insert(s.logSerial(l));
+    }
+    // and it goes on from there: the counts start again from 0
+    in.hits[0] = 1;
+    in.hits[1] = 0;
+    feed(s, in, {ev(kWhoYou, kEvNextChord)});
+    CHECK(unparked(s, 0, 4) == 1 && at(s.puck(0), 0.39), "after reset: a launch");
+    CHECK(std::string(s.logText(0)) == "You › Next chord" && !seen.count(s.logSerial(0)), "after reset: a line");
+}
+
 } // namespace
 
 int main()
@@ -868,6 +1281,11 @@ int main()
     not_logged();
     piece_events();
     overflow();
+    particles_launch_and_park();
+    planet_frames();
+    log_order_and_fit();
+    every_format_fits();
+    reset_clears();
     if (fails)
     {
         std::printf("test_screen: %d failures\n", fails);
