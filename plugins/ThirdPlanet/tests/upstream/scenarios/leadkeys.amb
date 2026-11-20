@@ -1,0 +1,26 @@
+# the white keys play the Lead in the scale (key i: degree i from the root up, in its register): the first piece,
+# Timewind, D Aeolian, the fourth white key (w3, key 6): degree 3, G4 (67); its key lit while it sounds; the black keys
+# do nothing; the scale is never changed from the keys (D Aeolian: 0 2 3 5 7 8 10 from the root, 1453)
+wait 500
+expect pool 1453
+key w3 down
+wait 300
+expect lastnote_ch3 67
+expect litkey6 1
+key w3 up
+wait 300
+expect litkey6 0
+# (the user) in play the black keys stay lit, apart from the white ones: the effects there; one goes dark while held;
+# a white key unlit until played
+expect litkey1 1
+expect litkey13 1
+expect litkey25 1
+expect litkey0 0
+key b1 down
+wait 300
+expect litkey3 0
+expect litkey1 1
+key b1 up
+wait 300
+expect litkey3 1
+expect pool 1453

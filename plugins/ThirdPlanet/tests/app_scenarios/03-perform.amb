@@ -1,0 +1,33 @@
+# PERFORM: mutes and solos, the macros, Lock, the Chords page, Hold, a shake, Evolve's nudges over time.
+wav out.wav
+wait 5000
+tap SEL
+wait 500
+tapkey w1
+wait 3000
+tapkey w1
+key b2 down
+wait 3000
+key b2 up
+turn K1 8
+turn K3 -6
+wait 4000
+key w7 down
+wait 3000
+key w7 up
+tap SEL
+wait 500
+tap HOME
+turn K2 30
+wait 20000
+tap EDIT
+wait 2000
+press EDIT
+wait 1600
+release EDIT
+wait 4000
+press ENV
+wait 1600
+release ENV
+wait 30000
+wavstop

@@ -1,0 +1,4 @@
+# Power-on: the first piece plays by itself for 60 s.
+wav out.wav
+wait 60000
+wavstop

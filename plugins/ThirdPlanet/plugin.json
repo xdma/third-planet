@@ -1,0 +1,17 @@
+{
+  "name": "Third Planet",
+  "manufacturer": "Shostak",
+  "version": "1.0.0",
+  "format": "vst2",
+  "kind": "instrument",
+  "uid": "Ssni",
+  "numInputs": 0,
+  "numOutputs": 2,
+  "category": "Synth",
+  "file32": "VST/third-planet-arm32.so",
+  "file64": "VST/third-planet-arm64.so",
+  "description": "Third Planet: a generative 1970s Berlin School instrument, a port of NACHTFAHRT (FM-1) by Cranky Man.",
+  "author": "Shostak",
+  "url": "",
+  "license": "GPL-3.0-only"
+}

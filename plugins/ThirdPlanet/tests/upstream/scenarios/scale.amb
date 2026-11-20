@@ -1,0 +1,42 @@
+# the scale: on the Key page's knobs (Root, Mode: once a song, the user), not the keys (they play the Lead), nor MIDI
+# in (it plays the Lead too)
+wait 300
+# the first piece (Timewind) is in D Aeolian; its root to C (HOME on the Berlin page, the Key page: KNOB 2, down to
+# its lowest)
+expect par20 5
+tap HOME
+wait 200
+expect view 18
+spin K2 -12
+expect par19 0
+# C Aeolian: C D Eb F G Ab Bb; the keys leave it be (E4, key 11, plays the Lead)
+expect pool 0x5AD
+tapkey 11
+expect pool 0x5AD
+# the next mode: Ionian (the Key page's KNOB 3; the modes the most common first: Aeolian, Ionian,
+# Dorian, Mixolydian, pentatonic minor and major, Phrygian, Lydian)
+spin K3 1
+expect par20 0
+expect pool 0xAB5
+spin K3 -1
+expect par20 5
+expect pool 0x5AD
+# the root up a tone: D Aeolian (the pool is relative to the root: the same)
+spin K2 2
+expect par19 2
+expect pool 0x5AD
+wait 300
+shot d_aeolian.png
+# pentatonic minor (four on from Aeolian)
+spin K3 4
+expect par20 7
+expect pool 0x4A9
+# MIDI in plays the Lead (any channel) and leaves the scale be: D pent min (D F G A C) stays, notes sent or not
+midi 90 35 64
+midi 90 37 64
+wait 20
+expect pool 0x4A9
+midi 80 35 0
+midi 80 37 0
+wait 20
+expect pool 0x4A9

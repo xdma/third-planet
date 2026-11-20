@@ -1,0 +1,77 @@
+# PERFORM (SEL): white 1-5 mute the Drone, the Sequence, the Lead, Sequence 2, the Atmosphere (their levels kept);
+# white 7-11 held: Sweep, Open, Shut, Drop (both sequences out), Push; SEL or a page's button leaves
+# (on Stratosfear: no Emerge, both sequences from the first bar)
+wait 500
+turn PRESET 4
+wait 300
+expect piece 4
+listen
+tap SEL
+wait 300
+expect view 17
+said PERFORM ON
+# the Sequence muted (white 2): no note on channel 2
+tapkey w1
+wait 300
+said SEQ
+peakreset
+wait 6000
+expect notes_ch2 0
+tapkey w1
+wait 300
+peakreset
+wait 6000
+expect notes_ch2 >0
+# Drop held (white 10): both sequences out, the Drone goes on
+key w9 down
+wait 300
+peakreset
+wait 6000
+expect notes_ch2 0
+expect notes_ch4 0
+key w9 up
+wait 300
+peakreset
+wait 6000
+expect notes_ch2 >0
+# a page's button leaves PERFORM
+tap ENV
+wait 300
+expect view 1
+# (BERLIN) the keys follow the meters, left to right: white 4 Sequence 2 (the 4th meter), white 5 the Atmosphere (the
+# 5th), the other untouched; a solo (black 4: Sequence 2) leaves the Atmosphere out too (Sunrain: Surf, both
+# sequences; Sequence 2 heard: its meter above 2, a moment's reading, which Sunrain's 8/7 caught at 4)
+turn PRESET 1
+wait 6000
+expect piece 5
+tap SEL
+wait 300
+expect view 17
+tapkey w4
+wait 300
+said ATMOS
+expect mutes 32
+wait 3000
+expect act4 0
+expect act3 >2
+tapkey w4
+wait 300
+tapkey w3
+wait 300
+said SEQ 2
+expect mutes 24
+wait 3000
+expect act3 0
+expect act4 >5
+tapkey w3
+wait 300
+tapkey b3
+wait 300
+said SOLO
+wait 3000
+expect act3 >2
+expect act4 0
+expect act1 0
+tapkey b3
+wait 3000
+expect act4 >5

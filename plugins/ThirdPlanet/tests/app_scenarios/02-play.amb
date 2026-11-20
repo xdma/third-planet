@@ -1,0 +1,47 @@
+# Playing: white keys play the Lead, black keys hold effects, a piece change, knobs turned.
+wav out.wav
+wait 8000
+tapkey w3
+tapkey w5
+key w7 down
+wait 600
+key w7 up
+tapkey w9
+wait 3000
+key b0 down
+wait 2500
+key b0 up
+wait 2000
+key b4 down
+wait 3000
+key b4 up
+wait 2000
+tap ARP
+turn K1 6
+turn K2 -4
+wait 3000
+turn PRESET 2
+wait 8000
+tap FX
+turn K1 5
+wait 4000
+tap REC
+wait 4000
+tap REC
+wait 3000
+press REC
+wait 600
+key w2 down
+wait 2000
+key w2 up
+release REC
+wait 3000
+midi 90 3C 64
+wait 400
+midi 80 3C 00
+wait 5000
+tap PLAY
+wait 3000
+tap PLAY
+wait 6000
+wavstop

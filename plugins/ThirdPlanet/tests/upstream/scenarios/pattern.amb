@@ -1,0 +1,35 @@
+# the Pattern page (SEQ three times): five lanes on the white keys, the Sequence's and Sequence 2's steps, their
+# octaves, the Sequence's skips; the first edit takes the pattern over from Auto (Play: Pattern); a black key held with a
+# white one: an accent; a lane's chance and accents are its sequence's
+wait 300
+listen
+tap SEQ
+tap SEQ
+tap SEQ
+wait 300
+expect view 16
+said Pattern page, voice Moog: Lane Steps, Accent 50, Chance 100%, Play Auto
+expect par105 0
+tapkey w1
+wait 300
+expect par105 1
+said Step 2
+tapkey w1
+wait 300
+said Step 2
+# the Skips lane: empty in Auto (the performer hasn't moved yet), one step skipped
+spin K1 4
+wait 300
+said Lane Skips
+expect par93 0
+tapkey w2
+wait 300
+expect par93 4
+# a lane's chance is its sequence's: Octaves 2 is Sequence 2's (par100), not a slot of its own
+spin K1 -1
+wait 300
+said Lane Octaves 2
+spin K3 -30
+wait 300
+expect par100 70
+expect par99 100

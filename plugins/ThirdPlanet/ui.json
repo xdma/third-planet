@@ -1,0 +1,165 @@
+{
+  "kit": "cyan",
+  "pages": [
+    {
+      "name": "MAIN",
+      "controls": [
+        { "param": "Filter", "widget": "knob", "polarity": "bipolar" },
+        { "param": "Evolve", "widget": "knob" },
+        { "param": "Motion", "widget": "knob" },
+        { "param": "Drift", "widget": "slider", "overlay": "menu" },
+        { "param": "Energy", "widget": "knob", "polarity": "bipolar" },
+        { "param": "Wet", "widget": "knob", "polarity": "bipolar" },
+        { "param": "Sweep", "widget": "knob" },
+        { "param": "Volume", "widget": "knob" },
+        { "param": "Drone", "widget": "fader" },
+        { "param": "Sequence", "widget": "fader" },
+        { "param": "Lead", "widget": "fader" },
+        { "param": "Sequence 2", "widget": "fader" },
+        { "param": "Piece", "widget": "slider", "overlay": "menu" },
+        { "param": "Tempo", "widget": "knob" },
+        { "param": "Root", "widget": "slider", "overlay": "menu" },
+        { "param": "Mode", "widget": "slider", "overlay": "menu" }
+      ]
+    },
+    {
+      "name": "DRONE",
+      "controls": [
+        { "param": "Pedal", "widget": "knob" },
+        { "param": "Drone reso", "widget": "knob", "polarity": "bipolar" },
+        { "param": "Phaser", "widget": "knob" },
+        { "param": "Drone attack", "widget": "knob" },
+        { "param": "Drone colour", "widget": "knob", "polarity": "bipolar" },
+        { "param": "Drone release", "widget": "knob" },
+        { "param": "Drone reverb", "widget": "knob" },
+        { "param": "Drone echo", "widget": "knob" },
+        { "param": "Drone width", "widget": "knob" },
+        { "param": "Drone time", "widget": "knob" },
+        { "param": "Drone rate", "widget": "knob" },
+        { "param": "Drone intro", "widget": "knob" },
+        { "param": "Drone voice", "widget": "slider", "overlay": "menu" },
+        "empty",
+        "empty",
+        "empty"
+      ]
+    },
+    {
+      "name": "SEQ",
+      "controls": [
+        { "param": "Density", "widget": "knob" },
+        { "param": "Seq octave", "widget": "slider", "overlay": "menu" },
+        { "param": "Seq length", "widget": "knob" },
+        { "param": "Seq grid", "widget": "switch" },
+        { "param": "Seq cutoff", "widget": "knob" },
+        { "param": "Seq decay", "widget": "knob" },
+        { "param": "Seq reverb", "widget": "knob" },
+        { "param": "Seq echo", "widget": "knob" },
+        { "param": "Repeat A", "widget": "knob" },
+        { "param": "A time", "widget": "slider", "overlay": "menu" },
+        { "param": "Repeat B", "widget": "knob" },
+        { "param": "B time", "widget": "slider", "overlay": "menu" },
+        { "param": "Seq voice", "widget": "slider", "overlay": "menu" },
+        { "param": "Seq time", "widget": "knob" },
+        { "param": "Seq rate", "widget": "knob" },
+        { "param": "Seq intro", "widget": "knob" }
+      ]
+    },
+    {
+      "name": "LEAD",
+      "controls": [
+        { "param": "Phrases", "widget": "knob" },
+        { "param": "Lead octave", "widget": "slider", "overlay": "menu" },
+        { "param": "Glide", "widget": "knob" },
+        { "param": "Vibrato", "widget": "knob" },
+        { "param": "Lead tone", "widget": "knob" },
+        { "param": "Lead attack", "widget": "knob" },
+        { "param": "Lead reverb", "widget": "knob" },
+        { "param": "Lead echo", "widget": "knob" },
+        { "param": "Lead width", "widget": "knob" },
+        { "param": "Lead time", "widget": "knob" },
+        { "param": "Lead rate", "widget": "knob" },
+        { "param": "Lead intro", "widget": "knob" },
+        { "param": "Lead voice", "widget": "slider", "overlay": "menu" },
+        "empty",
+        "empty",
+        "empty"
+      ]
+    },
+    {
+      "name": "SEQ 2",
+      "controls": [
+        { "param": "Seq2 chance", "widget": "knob" },
+        { "param": "Seq2 oct", "widget": "slider", "overlay": "menu" },
+        { "param": "Seq2 length", "widget": "knob" },
+        { "param": "Seq2 voice", "widget": "slider", "overlay": "menu" },
+        { "param": "Seq2 cutoff", "widget": "knob" },
+        { "param": "Seq2 decay", "widget": "knob" },
+        { "param": "Seq2 reverb", "widget": "knob" },
+        { "param": "Seq2 echo", "widget": "knob" },
+        { "param": "Lane", "widget": "slider", "overlay": "menu" },
+        { "param": "Accent", "widget": "knob" },
+        { "param": "Lane chance", "widget": "knob" },
+        { "param": "Pattern", "widget": "switch" },
+        { "param": "Seq2 width", "widget": "knob" },
+        { "param": "Seq2 time", "widget": "knob" },
+        { "param": "Seq2 rate", "widget": "knob" },
+        { "param": "Seq2 intro", "widget": "knob" }
+      ]
+    },
+    {
+      "name": "ATMOS",
+      "controls": [
+        { "param": "Atmos density", "widget": "knob", "polarity": "bipolar" },
+        { "param": "Atmos spread", "widget": "knob" },
+        { "param": "Atmos drift", "widget": "knob", "polarity": "bipolar" },
+        { "param": "Atmos air", "widget": "knob", "polarity": "bipolar" },
+        { "param": "Atmos colour", "widget": "knob", "polarity": "bipolar" },
+        { "param": "Atmos ring", "widget": "knob" },
+        { "param": "Atmos reverb", "widget": "knob" },
+        { "param": "Atmos echo", "widget": "knob" },
+        { "param": "Atmos width", "widget": "knob" },
+        { "param": "Atmos time", "widget": "knob" },
+        { "param": "Atmos rate", "widget": "knob" },
+        { "param": "Atmos intro", "widget": "knob" },
+        { "param": "Atmos type", "widget": "slider", "overlay": "menu" },
+        { "param": "Atmosphere", "widget": "fader" },
+        "empty",
+        "empty"
+      ]
+    },
+    {
+      "name": "SPACE",
+      "controls": [
+        { "param": "Echo", "widget": "knob" },
+        { "param": "Echo time", "widget": "slider", "overlay": "menu" },
+        { "param": "Feedback", "widget": "knob" },
+        { "param": "Reverb", "widget": "knob" },
+        { "param": "Echo blur", "widget": "knob" },
+        { "param": "Echo tone", "widget": "knob" },
+        { "param": "Echo width", "widget": "knob" },
+        { "param": "Plate size", "widget": "knob" },
+        { "param": "Lead in", "widget": "knob" },
+        { "param": "Bridge", "widget": "knob" },
+        { "param": "Arc", "widget": "knob" },
+        { "param": "Memory", "widget": "knob" },
+        { "param": "Transpose", "widget": "switch" },
+        { "param": "Tune", "widget": "knob", "polarity": "bipolar" },
+        { "param": "Sync", "widget": "switch" },
+        { "param": "Keys", "widget": "switch" }
+      ]
+    },
+    {
+      "name": "CHORDS",
+      "controls": [
+        { "param": "Chord slot", "widget": "knob" },
+        { "param": "Chord kind", "widget": "slider", "overlay": "menu" },
+        { "param": "Chord type", "widget": "slider", "overlay": "menu" },
+        { "param": "Chord play", "widget": "switch" },
+        { "param": "Walk", "widget": "switch" },
+        "empty",
+        "empty",
+        "empty"
+      ]
+    }
+  ]
+}
