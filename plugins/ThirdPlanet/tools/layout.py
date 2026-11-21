@@ -41,7 +41,9 @@ def centred(cx, cy, w, h):
 
 ASSETS = {
     # name: (frame w, frame h, frames)
-    "ring.png": (260, 260, 100),     # d_ring: 0 none; 1+k k dots; 34+k last bar (accent); 67+k held
+    # d_ring: 0 none; 1+k k dots; 34+k last bar (accent); 67+k held. R22: drawn at half size and scaled up into
+    # RING's 260 x 260 on the MPC (a 260 px strip doubled SKY's screen-thread cost).
+    "ring.png": (130, 130, 100),
     "planet.png": (64, 64, 24),      # Sky::planetFrame: level (0..7) x 3 + state (0 heard, 1 muted, 2 flash)
     "phrase.png": (240, 20, 9),      # d_phrase: 0 none; n bar n lit; bar 1 marked
     "star.png": (28, 28, 4),         # d_slot: 0 gap, 1 walk, 2 written, 3 playing (accent)
@@ -51,12 +53,13 @@ ASSETS = {
     "btn_off.png": (120, 44, 1),
     "cursor.png": (58, 6, 2),        # PATTERN step cursor: off, on
 }
-BACKGROUNDS = ("bg_sky.png", "bg_deck.png", "bg_chords.png", "bg_setup.png", "bg_plain.png")
+# (SKY's background is SKY_BG's pieces around the outer orbit pad, below.)
+BACKGROUNDS = ("bg_deck.png", "bg_chords.png", "bg_setup.png", "bg_plain.png")
 for _bg in BACKGROUNDS:
     ASSETS[_bg] = (SCREEN_W, SCREEN_H, 1)
 # Which background each tab uses (PATTERN and the layer pages share the plain one).
 TAB_BACKGROUND = {
-    "SKY": "bg_sky.png", "DECK": "bg_deck.png", "CHORDS": "bg_chords.png", "SETUP": "bg_setup.png",
+    "DECK": "bg_deck.png", "CHORDS": "bg_chords.png", "SETUP": "bg_setup.png",
     "PATTERN": "bg_plain.png", "DRONE": "bg_plain.png", "SEQ": "bg_plain.png", "SEQ 2": "bg_plain.png",
     "LEAD": "bg_plain.png", "ATMOS": "bg_plain.png", "SPACE": "bg_plain.png",
 }
@@ -89,6 +92,27 @@ BLACK_RX, BLACK_RY = ORBIT_RX + BLACK_MARGIN, ORBIT_RY + BLACK_MARGIN   # bg_sky
 def in_black(x, y):
     """Is the screen point inside the area bg_sky keeps pure black (the outer orbit ellipse + 8 px)?"""
     return ((x - SKY_CX) / BLACK_RX) ** 2 + ((y - SKY_CY) / BLACK_RY) ** 2 <= 1.0
+
+
+# R22: SKY's static background (gen_art.bg_sky, drawn whole) ships cut into these four Regular images around the
+# outer orbit pad, so no image lies under a puck (on the MPC an image under the pads costs screen time). The few
+# field stars in the pad's corners are lost.
+_px, _py, _pw, _ph = ORBIT_OUTER
+SKY_BG = {
+    "bg_sky_top.png": (0, 0, SCREEN_W, _py),
+    "bg_sky_bottom.png": (0, _py + _ph, SCREEN_W, SCREEN_H - _py - _ph),
+    "bg_sky_left.png": (0, _py, _px, _ph),
+    "bg_sky_right.png": (_px + _pw, _py, SCREEN_W - _px - _pw, _ph),
+}
+for _name, _r in SKY_BG.items():
+    ASSETS[_name] = (_r[2], _r[3], 1)
+
+
+def rect_overlap(a, b):
+    """Area two rects share, in pixels."""
+    w = min(a[0] + a[2], b[0] + b[2]) - max(a[0], b[0])
+    h = min(a[1] + a[3], b[1] + b[3]) - max(a[1], b[1])
+    return w * h if w > 0 and h > 0 else 0
 
 
 # The cover: a blank Name label over the orbits so a finger moves nothing.

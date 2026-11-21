@@ -50,6 +50,15 @@ class GenArtTest(unittest.TestCase):
         cls.out = cls.tmp.name
         cls.result = gen_art.generate(cls.out)
         cls.cache = {}
+        cls.sky_whole = gen_art.bg_sky().rows()     # SKY's background as drawn, before the cut (R22)
+
+    def sky_shipped(self):
+        """SKY's background as the MPC shows it: the SKY_BG pieces in place, plain BG under the outer pad."""
+        rows = [bytearray(bytes(layout.BG) * layout.SCREEN_W) for _ in range(layout.SCREEN_H)]
+        for name, (x, y, w, h) in layout.SKY_BG.items():
+            for yy, r in enumerate(self.png(name)[2]):
+                rows[y + yy][4 * x:4 * (x + w)] = r
+        return [bytes(r) for r in rows]
 
     @classmethod
     def tearDownClass(cls):
@@ -72,7 +81,7 @@ class GenArtTest(unittest.TestCase):
             self.assertEqual((pw, ph), (w, h * frames), name)
 
     def test_black_orbit(self):
-        _, _, rows = self.png("bg_sky.png")
+        rows = self.sky_shipped()
         n = 0
         for y in range(layout.SCREEN_H):
             for x in range(layout.SCREEN_W):
@@ -83,24 +92,46 @@ class GenArtTest(unittest.TestCase):
         self.assertAlmostEqual(n, math.pi * rx * ry, delta=0.01 * math.pi * rx * ry)
 
     def test_backgrounds_opaque(self):
-        for name in layout.BACKGROUNDS:
-            _, _, rows = self.png(name)
+        for name in layout.BACKGROUNDS + tuple(layout.SKY_BG):
+            w, _, rows = self.png(name)
             for y, r in enumerate(rows):
-                self.assertEqual(r[3::4].count(255), layout.SCREEN_W, "%s row %d has a see-through pixel" % (name, y))
+                self.assertEqual(r[3::4].count(255), w, "%s row %d has a see-through pixel" % (name, y))
 
     def test_backgrounds_carry_art(self):
         """Each background has something on it besides black (a hairline at least)."""
+        bg = bytes(layout.BG)
         for name in layout.BACKGROUNDS:
             _, _, rows = self.png(name)
-            bg = bytes(layout.BG)
             self.assertTrue(any(r != bg * layout.SCREEN_W for r in rows), name)
+        self.assertTrue(any(r != bg * layout.SCREEN_W for r in self.sky_shipped()), "SKY")
+
+    def test_sky_background_cut(self):
+        """R22: SKY's background pieces are the whole picture's pixels, none lies under the outer orbit pad, and
+        with the pad they tile the screen."""
+        for name, (x, y, w, h) in layout.SKY_BG.items():
+            pw, ph, rows = self.png(name)
+            self.assertEqual((pw, ph), (w, h), name)
+            self.assertEqual(rows, [r[4 * x:4 * (x + w)] for r in self.sky_whole[y:y + h]], name)
+            self.assertEqual(layout.rect_overlap((x, y, w, h), layout.ORBIT_OUTER), 0, name)
+            for other, r in layout.SKY_BG.items():
+                if other != name:
+                    self.assertEqual(layout.rect_overlap((x, y, w, h), r), 0, (name, other))
+        pw, ph = layout.ORBIT_OUTER[2:]
+        self.assertEqual(sum(w * h for _, _, w, h in layout.SKY_BG.values()) + pw * ph,
+                         layout.SCREEN_W * layout.SCREEN_H)
 
     def ring_dot(self, k):
+        """Centre of dot k in a ring.png frame: RING_R is in screen pixels, the frame is RING scaled down."""
         a = 2 * math.pi * k / layout.RING_DOTS - math.pi / 2
-        c = layout.ASSETS["ring.png"][0] / 2
-        return c + layout.RING_R * math.cos(a), c + layout.RING_R * math.sin(a)
+        w = layout.ASSETS["ring.png"][0]
+        z = w / layout.RING[2]
+        return w / 2 + z * layout.RING_R * math.cos(a), w / 2 + z * layout.RING_R * math.sin(a)
 
     def test_ring_frames(self):
+        """R22: 130 px frames scaled into the 260 px RING; at that size an unlit dot's centre pixel is only mostly
+        covered, so the colour is checked and the coverage has a floor."""
+        self.assertEqual(layout.ASSETS["ring.png"], (130, 130, 100))
+        self.assertEqual(layout.RING[2:], (260, 260))
         rows0 = self.frame_rows("ring.png", 0)
         self.assertTrue(all(not any(r[3::4]) for r in rows0), "frame 0 (no ring) must be empty")
         for f in range(1, 100):
@@ -110,13 +141,17 @@ class GenArtTest(unittest.TestCase):
             unlit = layout.DIM_ACCENT if state == 2 else layout.DIM
             for j in range(layout.RING_DOTS):
                 x, y = self.ring_dot(j)
-                self.assertEqual(pixel(rows, x, y), lit if j < k else unlit, "ring frame %d dot %d" % (f, j))
+                p = pixel(rows, x, y)
+                want = lit if j < k else unlit
+                self.assertEqual(p[:3], want[:3], "ring frame %d dot %d" % (f, j))
+                self.assertGreaterEqual(p[3], 255 if j < k else 160, "ring frame %d dot %d" % (f, j))
 
     def test_ring_starts_at_twelve_clockwise(self):
         x0, y0 = self.ring_dot(0)
         x1, y1 = self.ring_dot(1)
-        self.assertAlmostEqual(x0, 130)
-        self.assertLess(y0, 130)
+        c = layout.ASSETS["ring.png"][0] / 2
+        self.assertAlmostEqual(x0, c)
+        self.assertLess(y0, c)
         self.assertGreater(x1, x0)
         # between the disc and the inner orbit, less a puck
         self.assertGreater(layout.RING_R - 4, layout.DISC_R)
@@ -178,8 +213,8 @@ class GenArtTest(unittest.TestCase):
             for name in cells:
                 self.assertLessEqual(gen_art.text_width(name, 2), w - 6, name)
 
-    def assert_plain(self, name, rects):
-        _, _, rows = self.png(name)
+    def assert_plain(self, name, rects, rows=None):
+        rows = rows or self.png(name)[2]
         bg = bytes(layout.BG)
         for (x, y, w, h) in rects:
             for yy in range(y, y + h):
@@ -188,7 +223,7 @@ class GenArtTest(unittest.TestCase):
 
     def test_nothing_under_live_widgets(self):
         """No field star, line or caption under a SKY or CHORDS widget (text and strips must read clean)."""
-        self.assert_plain("bg_sky.png", layout.SKY_LIVE_RECTS)
+        self.assert_plain("SKY", layout.SKY_LIVE_RECTS, self.sky_shipped())
         self.assert_plain("bg_chords.png", layout.CHORDS_STARS + layout.CHORDS_LABELS)
 
     def test_layout_clear_of_black(self):

@@ -80,10 +80,15 @@ class SkinTest(unittest.TestCase):
             self.assertEqual(rect(c), L.ORBIT_INNER if i <= 4 else L.ORBIT_OUTER)
 
     def test_z_order(self):
-        """The background first; the disc after every puck (parked pucks hide behind it); the cover last, a blank
-        Name label over both pads."""
+        """The background pieces first; the disc after every puck (parked pucks hide behind it); the cover last, a
+        blank Name label over both pads."""
         names = [c["componentData"]["name"] for c in self.sky]
-        self.assertEqual(names[0], "background")
+        n = len(L.SKY_BG)
+        self.assertEqual([self.sky[i]["componentData"]["data"]["image"] for i in range(n)], list(L.SKY_BG))
+        self.assertTrue(all(name.startswith("background") for name in names[:n]))
+        self.assertFalse(any(name.startswith("background") for name in names[n:]))
+        first_puck = min(i for i, c in enumerate(self.sky) if c["componentData"]["type"] == "XYPad")
+        self.assertEqual(first_puck, n)
         last_puck = max(i for i, c in enumerate(self.sky) if c["componentData"]["type"] == "XYPad")
         self.assertGreater(names.index("disc"), last_puck)
         cover = self.sky[-1]
@@ -112,7 +117,7 @@ class SkinTest(unittest.TestCase):
 
     def test_images(self):
         """Every image exists; a film strip's frames match layout.ASSETS; a Regular image (not scaled on the MPC)
-        sits at its native size."""
+        sits at its native size, and so does every film strip but the ring (R22: drawn at half size, scaled up)."""
         for c in self.of_type("Image"):
             data = c["componentData"]["data"]
             path = os.path.join(SKINS, data["image"])
@@ -122,7 +127,29 @@ class SkinTest(unittest.TestCase):
             self.assertEqual((w, h), (fw, fh * frames), data["image"])
             if data["imageType"] == "FilmStrip":
                 self.assertEqual(data["numFrames"], frames, data["image"])
-            self.assertEqual(rect(c)[2:], (fw, fh), data["image"])
+            if data["image"] == "ring.png":
+                self.assertEqual(data["imageType"], "FilmStrip")
+                self.assertEqual(rect(c), L.RING)
+                self.assertEqual((fw, fh), (L.RING[2] // 2, L.RING[3] // 2))
+            else:
+                self.assertEqual(rect(c)[2:], (fw, fh), data["image"])
+
+    def test_no_background_under_the_pads(self):
+        """R22: SKY's background is Regular pieces at their places, none overlapping the outer orbit pad (an image
+        under the pucks costs screen time on the MPC); the full-screen bg_sky.png is gone."""
+        bgs = [c for c in self.of_type("Image") if c["componentData"]["name"].startswith("background")]
+        self.assertEqual(len(bgs), len(L.SKY_BG))
+        for c in bgs:
+            data = c["componentData"]["data"]
+            self.assertEqual(data["imageType"], "Regular")
+            self.assertEqual(rect(c), L.SKY_BG[data["image"]])
+            self.assertFalse(overlap(rect(c), L.ORBIT_OUTER), data["image"])
+        self.assertFalse(any(c["componentData"]["data"]["image"] == "bg_sky.png" for c in self.of_type("Image")))
+        self.assertFalse(os.path.exists(os.path.join(SKINS, "bg_sky.png")))
+
+    def test_images_total_size(self):
+        total = sum(os.path.getsize(os.path.join(SKINS, f)) for f in os.listdir(SKINS) if f.endswith(".png"))
+        self.assertLess(total, 1200 * 1000)
 
     def test_no_label_over_a_control(self):
         """A label drawn over a control takes its touches: no Label after a strip cell overlaps it, and SKY has no

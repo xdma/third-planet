@@ -303,7 +303,8 @@ def sky_cell_definitions():
 def sky_tab(c, d):
     """SKY, bottom of the z-order first. c: control indices by name; d: display parameter indices by id."""
     P = lambda i: "Parameter %d" % i
-    comps = [image("background", "bg_sky.png", (0, 0, L.SCREEN_W, L.SCREEN_H))]
+    # The static background in pieces around the outer pad: no image under a puck (R22).
+    comps = [image("background " + f[len("bg_sky_"):-len(".png")], f, r) for f, r in L.SKY_BG.items()]
     # The particles (R12): pucks 1-4 are the Sequence on the inner orbit, 5-8 Sequence 2 on the outer. Parked
     # pucks sit at (0.5, 0.5), behind the disc.
     for i in range(1, 9):
@@ -320,7 +321,7 @@ def sky_tab(c, d):
                            P(d["d_slot%d" % (i + 1)])))
         comps.append(text("slot chord %d" % (i + 1), "Value", P(d["d_slotname%d" % (i + 1)]), L.SLOT_LABELS[i],
                           style(18, "SemiBold", CREAM, CENTRED)))
-    # The left column (its captions ARC, PHRASE, NEXT, LOG are in bg_sky).
+    # The left column (its captions ARC, PHRASE, NEXT, LOG are in the background).
     comps += [
         text("section", "Value", P(d["d_section"]), L.ARC_VALUE, style(30, "Bold", CREAM)),
         image("phrase", "phrase.png", L.PHRASE_STRIP, L.ASSETS["phrase.png"][2], P(d["d_phrase"])),

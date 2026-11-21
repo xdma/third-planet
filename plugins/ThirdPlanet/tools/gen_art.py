@@ -225,13 +225,14 @@ def ring_frame(c, f):
     lit = L.CREAM if state == 0 else L.ACCENT
     unlit = L.DIM_ACCENT if state == 2 else L.DIM
     cx, cy = c.w / 2, c.h / 2
+    z = c.w / float(L.RING[2])      # R22: the frame is drawn small (0.5) and the MPC scales it up into RING
     for j in range(L.RING_DOTS):
         a = 2 * math.pi * j / L.RING_DOTS - math.pi / 2     # from 12 o'clock, clockwise
-        x, y = cx + L.RING_R * math.cos(a), cy + L.RING_R * math.sin(a)
+        x, y = cx + z * L.RING_R * math.cos(a), cy + z * L.RING_R * math.sin(a)
         if j < k:
-            c.dot(x, y, 3.2, lit)
+            c.dot(x, y, 3.2 * z, lit)
         else:
-            c.dot(x, y, 1.8, unlit)
+            c.dot(x, y, 1.8 * z, unlit)
 
 
 def planet_frame(c, f):
@@ -376,6 +377,7 @@ def _near_rect(x, y, r, pad):
 
 
 def bg_sky():
+    """SKY's whole static background; generate() writes it as the pieces of layout.SKY_BG."""
     c = Canvas(L.SCREEN_W, L.SCREEN_H, L.BG)
     c.hline(L.RULE_X0, L.RULE_X1, L.HEADER_RULE_Y, L.FAINT)
     for text, x, y in L.SKY_CAPTIONS:
@@ -446,7 +448,7 @@ def bg_setup():
     return c
 
 
-BACKGROUND_DRAW = {"bg_sky.png": bg_sky, "bg_deck.png": bg_deck, "bg_chords.png": bg_chords,
+BACKGROUND_DRAW = {"bg_deck.png": bg_deck, "bg_chords.png": bg_chords,
                    "bg_setup.png": bg_setup, "bg_plain.png": bg_plain}
 STRIP_DRAW = {"ring.png": ring_frame, "planet.png": planet_frame, "phrase.png": phrase_frame,
               "star.png": star_frame, "puck.png": puck, "disc.png": disc, "btn_on.png": btn_on,
@@ -461,7 +463,10 @@ def generate(out_dir):
     for name, draw in BACKGROUND_DRAW.items():
         c = draw()
         write_png(os.path.join(out_dir, name), c.w, c.rows())
-    assert set(STRIP_DRAW) | set(BACKGROUND_DRAW) == set(L.ASSETS)
+    rows = bg_sky().rows()      # R22: SKY's background ships as pieces around the outer orbit pad
+    for name, (x, y, w, h) in L.SKY_BG.items():
+        write_png(os.path.join(out_dir, name), w, [r[4 * x:4 * (x + w)] for r in rows[y:y + h]])
+    assert set(STRIP_DRAW) | set(BACKGROUND_DRAW) | set(L.SKY_BG) == set(L.ASSETS)
     return dict(L.ASSETS)
 
 
