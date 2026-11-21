@@ -101,7 +101,7 @@ int encodePlan(const PlanState& s, uint8_t seq, uint8_t* out)
     out[n++] = u7(s.phraseBar);
     out[n++] = u7(s.evolveChance);
     out[n++] = off7(s.densityShift, 64);
-    out[n++] = u7(s.heardMask);
+    out[n++] = s.heardMask & 0x1F;   // (a bit field: masked, not clamped)
     for (int i = 0; i < 5; i++) out[n++] = u7(s.activity[i]);
     out[n++] = u7(s.pos16);
     out[n++] = 0xF7;

@@ -153,6 +153,11 @@ void plan_equal()
     CHECK(!(a == b), "plan_equal: next's mask not compared");
     b = a; b.pos16++;
     CHECK(!(a == b), "plan_equal: pos16 not compared");
+    // heardMask is a bit field: bits past layer 4 are dropped, not clamped to 7F (every layer heard)
+    b = a; b.heardMask = 0x80 | 0x05;
+    uint8_t out[kMaxMsg];
+    encodePlan(b, 0, out);
+    CHECK(out[7 + 131] == 0x05, "heardMask 0x85 encodes as %02X, want 05", out[7 + 131]);
 }
 
 void event_golden()

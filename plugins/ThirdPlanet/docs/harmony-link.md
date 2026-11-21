@@ -69,7 +69,7 @@ Payload, 138 bytes, in this order:
 | Offset | Field | Encoding | Range and meaning |
 | --- | --- | --- | --- |
 | 0 | `flags` | byte | bit 0 `playing`, bit 1 `held` (Hold is on), bit 2 `locked`, bit 3 `loopMode` (the slots play in turn; 0: Endless), bit 4 `timed` (Third Planet runs on the host's clock) |
-| 1 | `piece` | byte | the piece (0-based) |
+| 1 | `piece` | byte | the piece's index |
 | 2 | `keyRoot` | byte | 0..11 (C..B) |
 | 3 | `keyMode` | byte | the mode's index |
 | 4 | `now` | CHORD | the chord playing |
@@ -84,7 +84,7 @@ Payload, 138 bytes, in this order:
 | 128 | `phraseBar` | byte | the bar within the phrase, 0..7 |
 | 129 | `evolveChance` | byte | Evolve's chance, in percent |
 | 130 | `densityShift` | offset byte (+64) | Density's slow drift (positive: denser, negative: sparser) |
-| 131 | `heardMask` | byte | bit n set: layer n (0..4) is heard (not muted, not soloed out) |
+| 131 | `heardMask` | byte | bit n set: layer n (0..4) is heard (not muted, not soloed out); bits 5 and 6 are 0 |
 | 132 | `activity` | 5 bytes | how much each layer (0..4) sounds now, 0..127 |
 | 137 | `pos16` | byte | the host's position when the PLAN was taken, in 16ths since the host's last bar line, 0..15 |
 
@@ -108,17 +108,17 @@ Payload, 9 bytes:
 
 ## BYE (`03`)
 
-No payload. Third Planet sends it when Link is turned off or the plugin closes. A receiver should forget the last
-PLAN.
+No payload. Third Planet sends it when Link is turned off or the plugin closes. No more PLANs follow until Link
+is on again: the last PLAN is no longer live, so a receiver should not schedule from its bar counts.
 
 ## FADE (`10`), to Third Planet
 
-Fade Third Planet's output to `level` over `bars`.
+Ramp Third Planet's output gain from where it is to `level / 127` over `bars` bars of the host clock.
 
 | Offset | Field | Encoding | Range |
 | --- | --- | --- | --- |
-| 0 | `level` | byte | 0 (silent)..127 (full) |
-| 1 | `bars` | 14-bit unsigned | 0..16383 bars (0: at once) |
+| 0 | `level` | byte | 0..127: the target gain is `level / 127` (0 silent, 127 full) |
+| 1 | `bars` | 14-bit unsigned | 0..16383 (0: at once) |
 
 ## HOLD (`11`), to Third Planet
 
