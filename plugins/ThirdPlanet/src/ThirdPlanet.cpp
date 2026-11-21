@@ -831,7 +831,8 @@ private:
     }
 
     // Sync: a start in the middle of a bar (a play from mid-song, after a locate) waits for the MPC's next bar line, so
-    // the piece's bar 1 is a bar of the song (T-1745, Dima's yes, 2026-11-21; a conductor's bar 1 is then the MPC's).
+    // the piece's bar 1 is a bar of the song (T-1745, Dima's yes, 2026-11-21; whatever follows the piece's bars then
+    // follows the MPC's).
     // True: start now, `first` the tick before the first clock. A start on a bar line, or with no bars from the host,
     // starts at once, as before.
     static bool barReady(const mpc::Transport& t, int frames, long long& first)
@@ -863,6 +864,7 @@ private:
             tp::app::midiIn(0x0F | 0xFAu << 8);   // Start: the piece from the top, on the MPC's play
             clockRunning_ = true;
             lastTick_ = first;
+            clockEnd_ = t.ppqPos;
         }
         else if (!run && clockRunning_)
         {
@@ -877,9 +879,15 @@ private:
         if (!run) return;
         const double end = t.ppqPos + (double)ctx.numFrames * t.bpm / 60.0 / 44100.0;
         long long last = (long long)std::floor(end * 24.0);
-        // (the MPC's loop jumped back: ppqPos wraps to its start. The clock goes on from there, one tick now, so the
-        // engine keeps its external clock; T-1757)
-        if (last < lastTick_ - 1) lastTick_ = last - 1;
+        // The position jumped back: the MPC's sequence looped (ppqPos wraps to the loop's start), or a locate. The
+        // clock's count moves back by the jump, in whole clocks, and goes on: what the last block already sent of the
+        // loop's first clocks (it ran past the loop's end) is not sent again, so the engine neither gains a clock a
+        // wrap nor loses its external clock (T-1757). The jump is measured from where the last block ended. A host
+        // that carries what ran past the loop's end into the next loop jumps a whole number of clocks exactly; one
+        // that starts the next loop at its start exactly jumps up to a block more, and that part is not the loop's.
+        // So the jump counts as N clocks from a quarter of a clock under N to three quarters over it.
+        if (last < lastTick_ - 1) lastTick_ += (long long)std::floor((t.ppqPos - clockEnd_) * 24.0 + 0.75);
+        clockEnd_ = end;
         if (last - lastTick_ > 48) lastTick_ = last - 48;   // (a jump in the song: no burst of clocks)
         for (; lastTick_ < last; ++lastTick_) tp::app::midiIn(0x0F | 0xF8u << 8);
     }
@@ -1378,6 +1386,7 @@ private:
     // Sync
     bool syncWas_ = false, unsyncPending_ = false, clockRunning_ = false, stoppedSent_ = false;
     long long lastTick_ = 0;
+    double clockEnd_ = 0.0;   // where the last block ended, in beats (the host's position plus the block's length)
 
     // audio
     int32_t buf_[2 * tp::kChunk] = {};

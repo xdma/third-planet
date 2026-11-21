@@ -26,7 +26,7 @@ VstIntPtr host(AEffect*, VstInt32 opcode, VstInt32, VstIntPtr, void*, float)
 }
 
 AEffect* fx = nullptr;
-float L[256], R[256];
+float L[512], R[512];
 void run(double secs)
 {
     float* outs[2] = {L, R};
@@ -39,20 +39,41 @@ void run(double secs)
     }
 }
 
-// The MPC's sequence loop: ppqPos wraps back by loopBeats once it reaches loopBeats + overshoot (on the device: 0..8,
-// then 0, on a 2-bar loop; docs/harmony-link-device-facts.md 1).
-void runLoop(double secs, double loopBeats, double overshoot)
+// The MPC's sequence loop, 2 bars of 4/4 at 124 BPM from the top, for secs. How the position gets back to the loop's
+// start is not known block by block (docs/harmony-link-device-facts.md 1), so every shape a host may give:
+enum Wrap {
+    kNoWrap,      // (the control: the position runs on)
+    kCarry,       // the block that crosses the loop's end starts the next one that far past its start (7.997, 0.003)
+    kOvershoot,   // the position runs 0.05 beats past the loop's end over several blocks, then jumps back 8 beats
+    kSnap         // the block after the one that crosses the loop's end starts at 0 exactly
+};
+// Returns the engine's sixteenths since the start minus the host's (its position with the wraps undone, in 16ths):
+// 0 is in step, +1 a sixteenth ahead. `burst`: the most sixteenths one block gave.
+double loopDrift(double secs, int n, Wrap wrap, int& burst, bool& ext)
 {
     float* outs[2] = {L, R};
-    const int n = 128;
-    ti.flags |= kVstBarsValid;
+    ti.flags &= ~kVstTransportPlaying;     // (stop first, so the only jumps back are the loop's wraps)
+    run(1.0);
+    ti.tempo = 124, ti.ppqPos = 0, ti.barStartPos = 0;
+    ti.flags |= kVstTransportPlaying | kVstBarsValid;
+    const double loopBeats = 8.0;
+    long wraps = 0;
+    uint32_t bars0 = 0, was = 0;
+    burst = 0;
     for (long done = 0; done < (long)(secs * 44100); done += n)
     {
         fx->processReplacing(fx, nullptr, outs, n);
-        if (ti.flags & kVstTransportPlaying) ti.ppqPos += n * ti.tempo / 60.0 / 44100.0;
-        if (ti.ppqPos >= loopBeats + overshoot) ti.ppqPos -= loopBeats;
+        if (done == 0) bars0 = was = en_bars - 1;   // (the Start's block: the piece from the top, its first sixteenth)
+        if ((int)(en_bars - was) > burst) burst = (int)(en_bars - was);
+        was = en_bars;
+        ti.ppqPos += n * ti.tempo / 60.0 / 44100.0;
+        if (wrap == kCarry && ti.ppqPos >= loopBeats) ti.ppqPos -= loopBeats, ++wraps;
+        else if (wrap == kOvershoot && ti.ppqPos >= loopBeats + 0.05) ti.ppqPos -= loopBeats, ++wraps;
+        else if (wrap == kSnap && ti.ppqPos >= loopBeats) ti.ppqPos = 0.0, ++wraps;
         ti.barStartPos = 4.0 * std::floor(ti.ppqPos / 4.0);   // (4/4)
     }
+    ext = tp::app::playing() && tp::app::external();
+    return (double)(en_bars - bars0) - ((double)wraps * loopBeats + ti.ppqPos) * 4.0;
 }
 
 } // namespace
@@ -129,21 +150,56 @@ int main()
     run(0.1);
     CHECK(tp::app::playing(), "bar line: a start on a bar line did not start at once");
 
-    // T-1757: a 2-bar MPC loop at 124 BPM; the clock must survive the wrap
-    ti.flags &= ~kVstTransportPlaying;     // (stop first, so the only jumps back are the loop's wraps)
-    run(1.0);
-    ti.tempo = 124; ti.ppqPos = 0; ti.barStartPos = 0; ti.flags |= kVstTransportPlaying | kVstBarsValid;
-    const uint32_t bars1757 = en_bars;
-    runLoop(20.0, 8.0, 0.0);
-    CHECK(tp::app::playing() && tp::app::external(), "T-1757: external clock lost after the loop wrapped (exact wrap)");
-    CHECK(en_bars - bars1757 >= 162 && en_bars - bars1757 <= 168,
-          "T-1757: 20 s of exact-wrap loops at 124 BPM gave %u sixteenths, not 165", en_bars - bars1757);
-    const uint32_t bars2 = en_bars;
-    runLoop(20.0, 8.0, 0.05);      // the host overshoots the loop end before jumping back
-    CHECK(tp::app::playing() && tp::app::external(), "T-1757: external clock lost after the loop wrapped (overshoot)");
-    // 20 s at 124 BPM = 41.3 beats = 165 sixteenths: one tick per 24th across each wrap, no burst, none lost
-    CHECK(en_bars - bars2 >= 162 && en_bars - bars2 <= 168, "T-1757: 20 s of loops at 124 BPM gave %u sixteenths, not 165",
-          en_bars - bars2);
+    // T-1757: a 2-bar MPC loop at 124 BPM, 8 minutes of it (124 wraps). The engine stays on the host's bars: within a
+    // sixteenth of the host's position however the loop wraps, at the MPC's block and at a long one; never two
+    // sixteenths in one block (no burst of clocks), and the external clock is never lost.
+    {
+        const char* const kWrapName[] = {"no wrap", "carry", "overshoot", "snap to 0"};
+        for (int n : {128, 512})
+            for (Wrap w : {kNoWrap, kCarry, kOvershoot, kSnap})
+            {
+                int burst = 0;
+                bool ext = false;
+                const double d = loopDrift(480.0, n, w, burst, ext);
+                std::printf("T-1757: 480 s, blocks of %d, %s: the engine %+.2f sixteenths from the host\n", n, kWrapName[w], d);
+                CHECK(ext, "T-1757: external clock lost (%s, blocks of %d)", kWrapName[w], n);
+                CHECK(d >= -1.0 && d <= 1.0, "T-1757: 480 s of 2-bar loops (%s, blocks of %d): the engine is %+.2f sixteenths from the host",
+                      kWrapName[w], n, d);
+                CHECK(burst <= 1, "T-1757: %d sixteenths in one block (%s, blocks of %d)", burst, kWrapName[w], n);
+            }
+    }
+
+    // A locate back while playing (not a loop: 26.7 beats, no whole number of clocks): the clock goes on from there,
+    // at the tempo, with no burst and no stall, and the engine keeps its external clock.
+    {
+        ti.flags &= ~kVstTransportPlaying;
+        run(1.0);
+        ti.tempo = 124, ti.ppqPos = 32.0, ti.barStartPos = 32.0;
+        ti.flags |= kVstTransportPlaying;
+        run(8.0 * 60.0 / 124.0);               // (to ppq 40)
+        ti.ppqPos = 13.3, ti.barStartPos = 12.0;
+        float* outs[2] = {L, R};
+        const uint32_t bars0 = en_bars;
+        uint32_t was = en_bars;
+        int burst = 0, stall = 0, quiet = 0;
+        const double secs = 10.0;              // 10 s at 124 BPM = 82.7 sixteenths
+        for (long done = 0; done < (long)(secs * 44100); done += 128)
+        {
+            fx->processReplacing(fx, nullptr, outs, 128);
+            if ((int)(en_bars - was) > burst) burst = (int)(en_bars - was);
+            quiet = en_bars == was ? quiet + 1 : 0;
+            if (quiet > stall) stall = quiet;
+            was = en_bars;
+            ti.ppqPos += 128 * ti.tempo / 60.0 / 44100.0;
+            ti.barStartPos = 4.0 * std::floor(ti.ppqPos / 4.0);
+        }
+        const int got = (int)(en_bars - bars0);
+        std::printf("locate back: %d sixteenths in 10 s, the longest gap %d blocks, at most %d in a block\n", got, stall, burst);
+        CHECK(tp::app::playing() && tp::app::external(), "locate back: external clock lost");
+        CHECK(got >= 82 && got <= 84, "locate back: %d sixteenths in the 10 s after it, not 83", got);
+        CHECK(burst <= 1, "locate back: %d sixteenths in one block", burst);
+        CHECK(stall <= 50, "locate back: no sixteenth for %d blocks (one is 42)", stall);
+    }
 
     fx->dispatcher(fx, effClose, 0, 0, nullptr, 0.0f);
     std::printf(fails ? "FAILED (%d)\n" : "ALL PASSED\n", fails);
