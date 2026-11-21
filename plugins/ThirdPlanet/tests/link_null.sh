@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-only
 # Harmony Link's default-path proof: with Link Off (the default), Third Planet is the link baseline exactly
-# (docs/superpowers/specs/2026-11-21-harmony-link-design.md). Ported from the Conductor's conductor_null.sh.
+# (docs/superpowers/specs/2026-11-21-harmony-link-design.md).
 #
 # tests/link_null.cpp (this tree's file, unchanged) plays one deterministic 90 s script into the plugin through its
 # VST entry and records the audio, the saved project, the host notifications and the final parameter values, over

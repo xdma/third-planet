@@ -61,8 +61,17 @@ No message is longer than 160 bytes. A receiver can ignore any SysEx that doesn'
 
 ## PLAN (`01`)
 
-The whole state of the harmony, sent whenever it changes, when the host transport starts, and as a heartbeat. A
+The whole state of the harmony, sent when it changes, when the host transport starts, and as a heartbeat. A
 receiver should treat each PLAN as complete: nothing in it depends on an earlier one.
+
+How often a PLAN comes:
+
+- A change in anything but `densityShift`, `activity` and `pos16` is sent at once, and so is the PLAN that follows
+  an EVENT. At most 20 PLANs a second: of several changes within 50 ms, only the newest state is sent.
+- While only `densityShift`, `activity` and `pos16` change (they move all the time while the piece plays), at most
+  2 PLANs a second, each with the newest state. So the layers' activity reaches a receiver at about 2 Hz.
+- With nothing new, the last PLAN is sent again every 2 seconds: the heartbeat.
+- The first PLAN after Link is turned on, or after the connection is made again, is sent at once.
 
 Payload, 138 bytes, in this order:
 
@@ -71,25 +80,59 @@ Payload, 138 bytes, in this order:
 | 0 | `flags` | byte | bit 0 `playing`, bit 1 `held` (Hold is on), bit 2 `locked`, bit 3 `loopMode` (the slots play in turn; 0: Endless), bit 4 `timed` (Third Planet runs on the host's clock) |
 | 1 | `piece` | byte | the piece's index |
 | 2 | `keyRoot` | byte | 0..11 (C..B) |
-| 3 | `keyMode` | byte | the mode's index |
+| 3 | `keyMode` | byte | the mode's index, 0..7: see [Modes](#modes) |
 | 4 | `now` | CHORD | the chord playing |
 | 15 | `next` | CHORD | the next chord that will sound |
 | 26 | `barsToNext` | offset byte (+64) | bars until `next` sounds, counting the bar playing; -2 while Hold is on, -1 with no next chord or while Drift holds the chord |
 | 27 | `barsToChange` | offset byte (+64) | bars to the next harmonic change, counting the bar playing (1: this is the last bar); -1 while Drift holds the chord; while Hold is on it counts down to 0 and stays there |
 | 28 | `progPos` | offset byte (+1) | the slot the progression is on, 0..7; -1 none |
 | 29 | `progCount` | byte | how many slots the progression runs through in Loop |
-| 30 | `walk` | byte | the walk's character (its index) |
+| 30 | `walk` | byte | the walk's character: 0 Home, 1 Wander, 2 Free (each more varied than the one before) |
 | 31 | 8 slots | 8 x 12 bytes | each: `slotState` (byte: 0 gap, 1 walk, 2 written), then a CHORD |
 | 127 | `section` | byte | the form's section: 0 Emerge, 1 Flow, 2 Solo, 3 Bridge |
 | 128 | `phraseBar` | byte | the bar within the phrase, 0..7 |
 | 129 | `evolveChance` | byte | Evolve's chance, in percent |
 | 130 | `densityShift` | offset byte (+64) | Density's slow drift (positive: denser, negative: sparser) |
-| 131 | `heardMask` | byte | bit n set: layer n (0..4) is heard (not muted, not soloed out); bits 5 and 6 are 0 |
-| 132 | `activity` | 5 bytes | how much each layer (0..4) sounds now, 0..127 |
-| 137 | `pos16` | byte | the host's position when the PLAN was taken, in 16ths since the host's last bar line, 0..15 |
+| 131 | `heardMask` | byte | bit n set: layer n (0..4, see [Layers](#layers)) is heard (not muted, not soloed out); bits 5 and 6 are 0 |
+| 132 | `activity` | 5 bytes | how much each layer (0..4, in the same order) sounds now, 0..127 |
+| 137 | `pos16` | byte | the host's position when the PLAN was taken, in 16ths since the host's last bar line, 0..15 (see below) |
+
+`pos16` stops at 15. In 4/4 a bar has 16 sixteenths, so it is exact. In a longer bar (5/4, 7/4, 12/8 and so on)
+every position from the 16th sixteenth to the bar's end reads 15; in a shorter bar (3/4, 7/8) it never gets that
+far. With no position from the host it is 0.
 
 When `timed` is 1, Third Planet's bar lines are the host's, so a receiver can turn "the next chord in N bars" plus
 `pos16` into an absolute bar. When `timed` is 0, the plan is untimed: use its harmony only, not its bar counts.
+
+### Modes
+
+`keyMode` is one of the instrument's eight modes. The notes are semitones above `keyRoot`.
+
+| `keyMode` | Mode | Notes |
+| --- | --- | --- |
+| 0 | Major (Ionian) | 0 2 4 5 7 9 11 |
+| 1 | Dorian | 0 2 3 5 7 9 10 |
+| 2 | Phrygian | 0 1 3 5 7 8 10 |
+| 3 | Lydian | 0 2 4 6 7 9 11 |
+| 4 | Mixolydian | 0 2 4 5 7 9 10 |
+| 5 | Minor (Aeolian) | 0 2 3 5 7 8 10 |
+| 6 | Major pentatonic | 0 2 4 7 9 |
+| 7 | Minor pentatonic | 0 3 5 7 10 |
+
+The player can change single notes of the scale on the instrument. `keyMode` then still names the mode the scale
+started from, so take `keyRoot` and `keyMode` as the key's name, and the notes to play from the chords' `mask`.
+
+### Layers
+
+`heardMask`, `activity` and an EVENT's mute or solo count the five layers in this order:
+
+| Layer | Name |
+| --- | --- |
+| 0 | Drone |
+| 1 | Sequence |
+| 2 | Lead |
+| 3 | Sequence 2 |
+| 4 | Atmosphere |
 
 ## EVENT (`02`)
 
@@ -101,10 +144,13 @@ Payload, 9 bytes:
 | --- | --- | --- | --- |
 | 0 | `who` | byte | 0 the player, 1 Evolve, 2 a piece change |
 | 1 | `what` | byte | 0 parameter, 1 voice, 2 Hold, 3 Lock, 4 play, 5 forget, 6 next chord, 7 new chords, 8 shake all, 9 reset, 10 mute, 11 solo, 12 nudge, 13 shake, 14 piece |
-| 2 | `layer` | offset byte (+1) | the layer or nudge target, -1 none |
+| 2 | `layer` | offset byte (+1) | -1 none. For mute and solo: the layer, 0..4 (see [Layers](#layers)). For nudge, shake, parameter and voice: the nudge's target, 0 Drone, 1 Sequence, 2 Lead, 3 Sequence 2, 4 Space, 5 Atmosphere |
 | 3 | `param` | 14-bit signed | the parameter, -1 none |
 | 5 | `from` | 14-bit signed | the value before (for on/off actions: 0 or 1) |
 | 7 | `to` | 14-bit signed | the value after |
+
+EVENTs are the player's actions and piece changes. What a command from the receiver does is not sent back as an
+EVENT: after a HOLD command there is no "Hold" EVENT, only a PLAN with `held` changed (see [HOLD](#hold-11-to-third-planet)).
 
 ## BYE (`03`)
 
@@ -120,9 +166,15 @@ Ramp Third Planet's output gain from where it is to `level / 127` over `bars` ba
 | 0 | `level` | byte | 0..127: the target gain is `level / 127` (0 silent, 127 full) |
 | 1 | `bars` | 14-bit unsigned | 0..16383 (0: at once) |
 
+The level goes back to full, at once, when the host transport starts, when Link is turned off and when a project
+is loaded. A FADE is not kept with the project.
+
 ## HOLD (`11`), to Third Planet
 
-Hold on or off, the same as the player's Hold.
+Hold on or off, the same as the player's Hold. Third Planet does not answer a HOLD with an EVENT: the next PLAN's
+`held` flag shows it. The same goes for a hold that Third Planet releases itself when the host transport starts (it
+releases only a hold that a HOLD command set, never the player's): a PLAN with `held` 0, no EVENT. When the player
+turns Hold on or off by hand, the EVENT comes as usual.
 
 | Offset | Field | Encoding | Range |
 | --- | --- | --- | --- |

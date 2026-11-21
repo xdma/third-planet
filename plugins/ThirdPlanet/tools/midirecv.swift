@@ -5,7 +5,7 @@
 // Default port substring: "MPC Live III". Clock (0xF8) is counted, not printed, unless --clock.
 // SysEx is reassembled from CoreMIDI's UMP packets (at most 160 bytes; longer ones are dropped) and printed as
 // "sysex (N bytes)", or with --link decoded as Harmony Link v1 (plugins/ThirdPlanet/docs/harmony-link.md):
-//   PLAN #33 key E Phrygian | now Emaj7#11 → next Am9 held | sec Bridge bar 7/8 | layers D:90 S:0 ... | timed pos 13
+//   PLAN #33 key E Lydian | now Emaj7#11 → next Am9 held | sec Bridge bar 7/8 | layers D:90 S:0 ... | timed pos 13
 //   EVENT You NextChord        BYE #5        FADE level 0 bars 16        HOLD on
 // --full adds a PLAN's other fields (flags, slots, ...) on indented lines. A lost Third Planet message (a gap in
 // seq) is noted; any other SysEx prints as hex.

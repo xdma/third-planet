@@ -4,7 +4,7 @@
 // Link) and against this tree with TP_LINK=0 and 1; with Link left Off, all three must write the same audio, saved
 // project and final values (link_null.sh says what it asks of the notifications). It uses
 // only base-era API: VSTPluginMain, processReplacing, dispatcher, setParameter, getParameter, tp::kParams (indices
-// found by id) and the host callback. (Ported from the Conductor's conductor_null.cpp.)
+// found by id) and the host callback.
 //
 // Link is a parameter inserted after Sync, not appended, so the harness works in the base's index space: the base's
 // parameter i is the build's i, or i + 1 from Link on. Link is looked up by its id "link" (absent in the base and
@@ -170,7 +170,7 @@ void buildMidi()
             const long len = 1 + pick((int)sec(2.0));
             note(f, ch, n, len);
         }
-        // notes on channel 15 (a conductor's Lead channel)
+        // notes on channel 15 (the Lead's channel for a sequencer that plays it)
         for (int k = pick(3); k-- > 0;)
         {
             const long f = at();
