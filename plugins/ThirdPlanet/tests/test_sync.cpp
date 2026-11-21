@@ -128,9 +128,14 @@ int main()
     CHECK(tp::app::playing(), "bar line: a start on a bar line did not start at once");
 
     // T-1757: a 2-bar MPC loop at 124 BPM; the clock must survive the wrap
-    ti.tempo = 124; ti.ppqPos = 0; ti.flags |= kVstTransportPlaying | kVstBarsValid;
+    ti.flags &= ~kVstTransportPlaying;     // (stop first, so the only jumps back are the loop's wraps)
+    run(1.0);
+    ti.tempo = 124; ti.ppqPos = 0; ti.barStartPos = 0; ti.flags |= kVstTransportPlaying | kVstBarsValid;
+    const uint32_t bars1757 = en_bars;
     runLoop(20.0, 8.0, 0.0);
     CHECK(tp::app::playing() && tp::app::external(), "T-1757: external clock lost after the loop wrapped (exact wrap)");
+    CHECK(en_bars - bars1757 >= 162 && en_bars - bars1757 <= 168,
+          "T-1757: 20 s of exact-wrap loops at 124 BPM gave %u sixteenths, not 165", en_bars - bars1757);
     const uint32_t bars2 = en_bars;
     runLoop(20.0, 8.0, 0.05);      // the host overshoots the loop end before jumping back
     CHECK(tp::app::playing() && tp::app::external(), "T-1757: external clock lost after the loop wrapped (overshoot)");
