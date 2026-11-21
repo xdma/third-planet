@@ -100,6 +100,40 @@ facts instead), its pages and PERFORM as modes, the panel's gesture timing (taps
 (the MPC discards plugin MIDI out), the button lights, and the FM-1's own save gesture (GLO held). The
 MPC project saves instead.
 
+## Harmony Link
+
+Harmony Link lets Third Planet lead the harmony of another program, such as a sequencer on a computer. Over USB
+MIDI, Third Planet sends what its harmony is doing and what comes next: the chord playing, the next chord and how
+many bars away it is, the progression's slots, the form's section and how much each layer is playing. The other
+program can send two commands back: a fade of Third Planet's output over a number of bars, and Hold. The format
+is open SysEx, written down in [docs/harmony-link.md](docs/harmony-link.md) with golden vectors in
+[docs/harmony-link-vectors.txt](docs/harmony-link-vectors.txt).
+
+**Switching it on.** Connect the MPC to the computer by USB and turn on **Link** on the PLAY page. It is Off by
+default. While Link is on, Third Planet sends to the MPC's USB MIDI function, which the computer sees as
+"MPC Live III Port 1", and it listens there for commands. It needs no extra track, MIDI routing or network. It
+sends a PLAN whenever the harmony changes, and again every 2 seconds. Each of the player's actions (Next chord, Hold,
+a mute) and each piece change also goes out at once as an EVENT. Evolve's own changes show only in the next
+PLAN. Turning Link off sends BYE. A FADE runs over the host's bars. HOLD works the same as the Hold switch. The
+MPC's Play brings the level back to full and releases a Hold that a command set. Builds with
+`--define TP_LINK=0` have no Link at all.
+
+**Mac tools** (`tools/`, one file each; build with `swiftc -O tools/midirecv.swift -o midirecv`, likewise for
+`midisend`):
+
+| Command | What it does |
+| --- | --- |
+| `midirecv "MPC Live III Port 1" --link` | Prints each Link message on one line, such as `PLAN #33 key E Lydian \| now Emaj7#11 → next Am9 held \| sec Bridge bar 7/8 \| layers D:90 S:0 L:45 S2:127 A:13 \| timed pos 13`, `EVENT You NextChord` or `BYE #5`. `--full` adds the PLAN's other fields (flags, slots, masks). A gap in Third Planet's message counter is noted as lost messages. |
+| `midirecv --decode-file docs/harmony-link-vectors.txt` | Decodes each vector line and exits nonzero if any line fails to decode. Use it to check the decoder against the format. |
+| `midisend "MPC Live III Port 1" fade:0:16` | FADE: down to silence over 16 bars (`fade:LEVEL:BARS`, level 0..127, bars 0..16383). |
+| `midisend "MPC Live III Port 1" hold:1` | HOLD on (`hold:0` is off). |
+| `midisend PORT sx:F07D545001110001F7` | Any raw SysEx, from F0 to F7. |
+
+The PLAN line shows the bar of the phrase counting from 1 (`bar 7/8` is `phraseBar` 6). `next X held` means Hold
+is on. `(no count)` means there is no next chord, or Drift is holding the chord. `untimed` means the bar counts
+should not be used. To try both tools without an MPC, use the IAC bus: run `midirecv IAC --link` in one terminal
+and `midisend IAC fade:0:16 hold:1` in another.
+
 ## How it is built
 
 - `src/nachtfahrt/`: NACHTFAHRT's code at upstream commit `f2de0d6`. The engine is `dsp/`, the app is
