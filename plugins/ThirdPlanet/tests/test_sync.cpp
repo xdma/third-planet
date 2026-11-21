@@ -37,6 +37,22 @@ void run(double secs)
     }
 }
 
+// The MPC's sequence loop: ppqPos wraps back by loopBeats once it reaches loopBeats + overshoot (on the device: 0..8,
+// then 0, on a 2-bar loop; docs/harmony-link-device-facts.md 1).
+void runLoop(double secs, double loopBeats, double overshoot)
+{
+    float* outs[2] = {L, R};
+    const int n = 128;
+    ti.flags |= kVstBarsValid;
+    for (long done = 0; done < (long)(secs * 44100); done += n)
+    {
+        fx->processReplacing(fx, nullptr, outs, n);
+        if (ti.flags & kVstTransportPlaying) ti.ppqPos += n * ti.tempo / 60.0 / 44100.0;
+        if (ti.ppqPos >= loopBeats + overshoot) ti.ppqPos -= loopBeats;
+        ti.barStartPos = 4.0 * std::floor(ti.ppqPos / 4.0);   // (4/4)
+    }
+}
+
 } // namespace
 
 int main()
@@ -110,6 +126,17 @@ int main()
     ti.flags |= kVstTransportPlaying;
     run(0.1);
     CHECK(tp::app::playing(), "bar line: a start on a bar line did not start at once");
+
+    // T-1757: a 2-bar MPC loop at 124 BPM; the clock must survive the wrap
+    ti.tempo = 124; ti.ppqPos = 0; ti.flags |= kVstTransportPlaying | kVstBarsValid;
+    runLoop(20.0, 8.0, 0.0);
+    CHECK(tp::app::playing() && tp::app::external(), "T-1757: external clock lost after the loop wrapped (exact wrap)");
+    const uint32_t bars2 = en_bars;
+    runLoop(20.0, 8.0, 0.05);      // the host overshoots the loop end before jumping back
+    CHECK(tp::app::playing() && tp::app::external(), "T-1757: external clock lost after the loop wrapped (overshoot)");
+    // 20 s at 124 BPM = 41.3 beats = 165 sixteenths: one tick per 24th across each wrap, no burst, none lost
+    CHECK(en_bars - bars2 >= 162 && en_bars - bars2 <= 168, "T-1757: 20 s of loops at 124 BPM gave %u sixteenths, not 165",
+          en_bars - bars2);
 
     fx->dispatcher(fx, effClose, 0, 0, nullptr, 0.0f);
     std::printf(fails ? "FAILED (%d)\n" : "ALL PASSED\n", fails);

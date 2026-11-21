@@ -831,6 +831,9 @@ private:
         if (!run) return;
         const double end = t.ppqPos + (double)ctx.numFrames * t.bpm / 60.0 / 44100.0;
         long long last = (long long)std::floor(end * 24.0);
+        // (the MPC's loop jumped back: ppqPos wraps to its start. The clock goes on from there, one tick now, so the
+        // engine keeps its external clock; T-1757)
+        if (last < lastTick_ - 1) lastTick_ = last - 1;
         if (last - lastTick_ > 48) lastTick_ = last - 48;   // (a jump in the song: no burst of clocks)
         for (; lastTick_ < last; ++lastTick_) tp::app::midiIn(0x0F | 0xF8u << 8);
     }
