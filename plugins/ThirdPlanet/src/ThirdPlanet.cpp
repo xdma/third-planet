@@ -784,6 +784,21 @@ private:
         return t;
     }
 
+    // Sync: a start in the middle of a bar (a play from mid-song, after a locate) waits for the MPC's next bar line, so
+    // the piece's bar 1 is a bar of the song (T-1745, Dima's yes, 2026-11-21; a conductor's bar 1 is then the MPC's).
+    // True: start now, `first` the tick before the first clock. A start on a bar line, or with no bars from the host,
+    // starts at once, as before.
+    static bool barReady(const mpc::Transport& t, int frames, long long& first)
+    {
+        const double barLen = t.timeSigDenominator > 0 ? t.timeSigNumerator * 4.0 / t.timeSigDenominator : 4.0;
+        const double into = t.ppqPos - t.barStartPpq;
+        if (!(barLen >= 0.25 && barLen <= 64.0) || !(into > 0.01 && into < barLen - 0.01)) return true;   // (on a bar line,
+        const double next = t.barStartPpq + barLen;                                                        // or no bars)
+        if (t.ppqPos + (double)frames * t.bpm / 60.0 / 44100.0 < next) return false;
+        first = (long long)std::floor(next * 24.0) - 1;
+        return true;
+    }
+
     // Sync: the MPC's transport as the FM-1's MIDI clock in (24 a beat, start, stop).
     void clock(const mpc::ProcessContext& ctx)
     {
@@ -797,9 +812,11 @@ private:
         const bool run = t.playing && t.ppqValid;
         if (run && !clockRunning_)
         {
+            long long first = (long long)std::floor(t.ppqPos * 24.0) - 1;
+            if (!barReady(t, ctx.numFrames, first)) return;   // (a start mid-bar: Start on the bar line)
             tp::app::midiIn(0x0F | 0xFAu << 8);   // Start: the piece from the top, on the MPC's play
             clockRunning_ = true;
-            lastTick_ = (long long)std::floor(t.ppqPos * 24.0) - 1;
+            lastTick_ = first;
         }
         else if (!run && clockRunning_)
         {

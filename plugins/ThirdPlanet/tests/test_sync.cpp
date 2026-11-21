@@ -4,6 +4,7 @@
 // while playing keeps it playing on its own clock (and off while stopped starts it).
 //   c++ -std=c++17 -O1 -I plugins/ThirdPlanet/src -I deps/mpc-plugin-sdk/framework plugins/ThirdPlanet/tests/test_sync.cpp \
 //       plugins/ThirdPlanet/src/app_unit.cpp plugins/ThirdPlanet/src/engine_unit.cpp plugins/ThirdPlanet/src/power.cpp plugins/ThirdPlanet/src/sky.cpp
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -32,6 +33,7 @@ void run(double secs)
     {
         fx->processReplacing(fx, nullptr, outs, n);
         if (ti.flags & kVstTransportPlaying) ti.ppqPos += n * ti.tempo / 60.0 / 44100.0;
+        if (ti.flags & kVstBarsValid) ti.barStartPos = 4.0 * std::floor(ti.ppqPos / 4.0);   // (4/4)
     }
 }
 
@@ -88,6 +90,26 @@ int main()
     fx->setParameter(fx, iSync, 0.0f);     // Sync off while rested: the piece starts again
     run(1.0);
     CHECK(tp::app::playing(), "Sync off while rested: the piece did not start");
+
+    // T-1745: a start in the middle of a bar waits for the MPC's next bar line; a start on a bar line starts at once
+    fx->setParameter(fx, iSync, 1.0f);
+    ti.flags |= kVstBarsValid | kVstTimeSigValid;
+    ti.timeSigNumerator = 4, ti.timeSigDenominator = 4, ti.tempo = 120;
+    run(1.0);
+    CHECK(!tp::app::playing(), "bar line: Sync on with the MPC stopped: still playing");
+    ti.ppqPos = 9.5, ti.barStartPos = 8.0;  // (a play from the middle of bar 3)
+    ti.flags |= kVstTransportPlaying;
+    run(0.5);                              // (to ppq 10.5)
+    CHECK(!tp::app::playing(), "bar line: a start mid-bar started at once");
+    run(1.5);                              // (to ppq 13.5: past the bar line at 12)
+    CHECK(tp::app::playing() && tp::app::external(), "bar line: not playing on the MPC's clock after the bar line");
+    CHECK(en_bars >= 5 && en_bars <= 7, "bar line: %u sixteenths 1.5 beats after the bar line, not 6", en_bars);
+    ti.flags &= ~kVstTransportPlaying;
+    run(1.0);
+    ti.ppqPos = 16.0, ti.barStartPos = 16.0;   // (a play from a bar line)
+    ti.flags |= kVstTransportPlaying;
+    run(0.1);
+    CHECK(tp::app::playing(), "bar line: a start on a bar line did not start at once");
 
     fx->dispatcher(fx, effClose, 0, 0, nullptr, 0.0f);
     std::printf(fails ? "FAILED (%d)\n" : "ALL PASSED\n", fails);
