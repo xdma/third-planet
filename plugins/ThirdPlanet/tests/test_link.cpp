@@ -7,7 +7,10 @@
 //   - the ring keeps Events in push order (dropping the newest when full) and never loses the latest Plan;
 //   - with Link On the SKY log and the audio are what they are with Link Off.
 //   - the plugin's own link thread takes the ring with Link On and idles with Link Off (every other test keeps it
-//     idle, linkSend_ = false, and pops the ring itself).
+//     idle, linkSend_ = false, and pops the ring itself);
+//   - the computer's commands (5.6), written into the worker's atomics here as the worker would: FADE ramps the output
+//     in host bars, HOLD holds, a transport START resets both (a hold set by hand stays), Link Off ignores them;
+//   - Harmony Link's own SysEx (and any other) delivered to the plugin changes nothing.
 // TP_LINK=1 only.
 //   c++ -std=c++17 -O2 -DTP_LINK=1 -I plugins/ThirdPlanet/src -I deps/mpc-plugin-sdk/framework \
 //       plugins/ThirdPlanet/tests/test_link.cpp plugins/ThirdPlanet/src/app_unit.cpp \
@@ -488,7 +491,7 @@ void worker_takes_the_ring()
     setLink(*p, false);
     CHECK(until(*p, [&] { return w.state.load() == Worker::Off; }), "worker: Link Off, and the link is still open");
     const uint32_t taken = w.takenCount.load();
-    for (int i = 0; i < 20; ++i)   // (100 ms: five of the idle thread's sleeps)
+    for (int i = 0; i < 40; ++i)   // (200 ms: two of the idle thread's sleeps)
     {
         block(*p);
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -501,6 +504,259 @@ void worker_takes_the_ring()
     // an instance that never played: the thread is made and joined all the same
     for (int i = 0; i < 20; ++i)
         ThirdPlanet q;
+}
+
+
+// ---- the computer's commands (spec 5.6), written as the worker writes them ----
+void fade(ThirdPlanet& p, int level, int bars)
+{
+    tp::link::Worker& w = p.linkWorker_;
+    w.fadeLevel.store((uint32_t)level, std::memory_order_relaxed);
+    w.fadeBars.store((uint32_t)bars, std::memory_order_relaxed);
+    w.fadeSeq.fetch_add(1, std::memory_order_release);
+}
+void holdCommand(ThirdPlanet& p, bool on) { p.linkWorker_.holdCmd.store(on ? 1 : 0, std::memory_order_release); }
+void setPlaying(bool on)
+{
+    if (on) ti.flags |= kVstTransportPlaying;
+    else ti.flags &= ~kVstTransportPlaying;
+}
+// (the output of a run, block by block, from a point on)
+void record(ThirdPlanet& p, long frames, std::vector<float>& out)
+{
+    for (long done = 0; done < frames; done += 128)
+    {
+        block(p);
+        out.insert(out.end(), L, L + 128);
+        out.insert(out.end(), R, R + 128);
+    }
+}
+double rms(const std::vector<float>& v, long from, long n)   // (frames from..from+n of an interleaved-by-block record)
+{
+    double s = 0;
+    long k = 0;
+    for (long f = from; f < from + n; ++f)
+    {
+        const long b = f / 128, i = f % 128;
+        if (b * 256 + 128 + i >= (long)v.size()) break;
+        const double l = v[b * 256 + i], r = v[b * 256 + 128 + i];
+        s += l * l + r * r, k += 2;
+    }
+    return k ? std::sqrt(s / k) : 0.0;
+}
+bool silent(const float* x, int n)
+{
+    for (int i = 0; i < n; ++i)
+        if (x[i] != 0.0f) return false;
+    return true;
+}
+
+// FADE(0, 4) at 120 BPM, playing: 4 bars are 8 s. The cos curve from 1 toward 0 is 0.92 one bar in and reaches 0 at
+// 4 bars exactly; from there the output is silent. (Against a twin run with no fade: the music's own level moves.)
+void fade_reaches_target_in_bars()
+{
+    const long bar = 2 * 44100, lead = 2 * 44100 / 128 * 128;
+    std::vector<float> ref, out;
+    for (int twin = 0; twin < 2; ++twin)
+    {
+        auto p = make();
+        setLink(*p, true);
+        setPlaying(true);
+        run(*p, (double)lead / 44100);
+        if (twin) fade(*p, 0, 4);   // (taken at the start of the next block)
+        record(*p, 4 * bar + 44100, twin ? out : ref);
+        drain(*p);
+    }
+    const long w = 2205;   // 50 ms
+    const double ratio1 = rms(out, bar - w, 2 * w) / rms(ref, bar - w, 2 * w);
+    CHECK(ratio1 > 0.5 && ratio1 < 0.95, "fade_reaches_target: one bar in, %.3f of the level without the fade", ratio1);
+    const double before = rms(out, 4 * bar - w, w) / rms(ref, 4 * bar - w, w);
+    CHECK(before < 0.02, "fade_reaches_target: the last 50 ms before 4 bars at %.4f of the level", before);
+    const double after = rms(out, 4 * bar, w);
+    CHECK(after <= 1e-6 && rms(ref, 4 * bar, w) > 1e-4, "fade_reaches_target: 50 ms from 4 bars at RMS %g", after);
+    std::printf("fade_reaches_target: one bar in %.3f, the 50 ms before 4 bars %.4f, from 4 bars RMS %g\n", ratio1, before, after);
+}
+
+// FADE(0, 0) at once; a transport START brings the level back (the next set begins at full); with Link Off nothing.
+void fade_zero_bars_then_start_resets()
+{
+    auto p = make();   // (Sync off: the piece plays on its own clock with the MPC stopped)
+    setLink(*p, true);
+    run(*p, 2.0);
+    CHECK(!silent(L, 128), "fade_zero_bars: silent before the fade (the test proves nothing)");
+    fade(*p, 0, 0);
+    block(*p);
+    CHECK(silent(L, 128) && silent(R, 128), "fade_zero_bars: the block after FADE(0, 0) is not silent");
+    CHECK(p->linkGain() == 0.0f, "fade_zero_bars: gain %g, not 0", p->linkGain());
+    run(*p, 0.5);
+    CHECK(silent(L, 128), "fade_zero_bars: sound again with no START");
+    setPlaying(true);
+    block(*p);
+    CHECK(p->linkGain() == 1.0f, "fade_zero_bars: gain %g a block after START, not 1", p->linkGain());
+    bool sound = !silent(L, 128);
+    for (long done = 0; done < 4 * 44100 && !sound; done += 128)
+    {
+        block(*p);
+        sound = !silent(L, 128);
+    }
+    CHECK(sound, "fade_zero_bars: no sound within 2 bars of START");
+    // with Sync on, the piece waits for the MPC: START resets the level at once, the piece follows on its bar line
+    setPlaying(false);
+    p->setNormalised(idx("sync"), 1.0f);
+    run(*p, 1.0);
+    fade(*p, 64, 0);
+    block(*p);
+    CHECK(std::fabs(p->linkGain() - 64.0f / 127.0f) < 1e-6f, "fade_zero_bars: FADE(64, 0) gain %g", p->linkGain());
+    ti.ppqPos = 0.0;
+    setPlaying(true);
+    block(*p);
+    CHECK(p->linkGain() == 1.0f, "fade_zero_bars: Sync on, gain %g a block after START", p->linkGain());
+    sound = false;
+    for (long done = 0; done < 4 * 44100 && !sound; done += 128)
+    {
+        block(*p);
+        sound = !silent(L, 128);
+    }
+    CHECK(sound, "fade_zero_bars: Sync on, no sound within 2 bars of START");
+    drain(*p);
+}
+
+// HOLD(1) through the hand's own path: the engine holds and the MPC's Hold parameter says On.
+void hold_command_sets_hold()
+{
+    auto p = make();
+    setLink(*p, true);
+    run(*p, 1.0);
+    CHECK(!tp::app::held(), "hold_command: held before the command");
+    holdCommand(*p, true);
+    block(*p), block(*p);
+    CHECK(tp::app::held(), "hold_command: not held 2 blocks after HOLD(1)");
+    run(*p, 0.1);
+    CHECK(p->getBool(idx("hold")), "hold_command: the Hold parameter is not On");
+    CHECK(p->linkWorker_.holdCmd.load() == -1, "hold_command: the command was not taken");
+    holdCommand(*p, false);
+    run(*p, 0.1);
+    CHECK(!tp::app::held() && !p->getBool(idx("hold")), "hold_command: HOLD(0) did not release");
+    drain(*p);
+}
+
+// START releases a hold the computer set, never one set by hand (nor one the hand already had when the command came).
+void start_releases_link_hold_only()
+{
+    auto p = make();
+    setLink(*p, true);
+    run(*p, 1.0);
+    holdCommand(*p, true);
+    run(*p, 0.1);
+    CHECK(tp::app::held(), "start_releases: the command did not hold");
+    setPlaying(true);
+    run(*p, 0.1);
+    CHECK(!tp::app::held(), "start_releases: a hold set by command stays after START");
+    run(*p, 0.1);
+    CHECK(!p->getBool(idx("hold")), "start_releases: the Hold parameter still On");
+    // by hand
+    setPlaying(false);
+    p->setNormalised(idx("hold"), 1.0f);
+    run(*p, 0.1);
+    CHECK(tp::app::held(), "start_releases: the Hold parameter did not hold");
+    setPlaying(true);
+    run(*p, 0.2);
+    CHECK(tp::app::held() && p->getBool(idx("hold")), "start_releases: a hold set by hand released at START");
+    // by hand, then the command on top: still the hand's
+    setPlaying(false);
+    holdCommand(*p, true);
+    run(*p, 0.1);
+    setPlaying(true);
+    run(*p, 0.2);
+    CHECK(tp::app::held(), "start_releases: a hand's hold released at START after a HOLD(1) on top");
+    // by command, then the hand writes Hold On over it: the hand's now
+    p->setNormalised(idx("hold"), 0.0f);
+    run(*p, 0.1);
+    setPlaying(false);
+    holdCommand(*p, true);
+    run(*p, 0.1);
+    CHECK(tp::app::held(), "start_releases: the second command did not hold");
+    p->setNormalised(idx("hold"), 0.0f);   // (the hand off and on again, through the parameter)
+    run(*p, 0.1);
+    p->setNormalised(idx("hold"), 1.0f);
+    run(*p, 0.1);
+    setPlaying(true);
+    run(*p, 0.2);
+    CHECK(tp::app::held(), "start_releases: the hand's hold (taken over from a command's) released at START");
+    drain(*p);
+}
+
+// Link Off: commands are taken and dropped, never applied later; turning Link Off undoes what they did.
+void link_off_ignores_commands()
+{
+    auto p = make();
+    run(*p, 1.0);
+    fade(*p, 0, 0);
+    holdCommand(*p, true);
+    run(*p, 0.2);
+    CHECK(p->linkGain() == 1.0f && !silent(L, 128), "link_off: FADE applied with Link Off");
+    CHECK(!tp::app::held(), "link_off: HOLD applied with Link Off");
+    CHECK(p->linkWorker_.holdCmd.load() == -1, "link_off: the HOLD was not drained");
+    setLink(*p, true);
+    run(*p, 0.2);
+    CHECK(p->linkGain() == 1.0f && !tp::app::held(), "link_off: a command from Link Off applied at Link On");
+    fade(*p, 0, 0);
+    holdCommand(*p, true);
+    run(*p, 0.2);
+    CHECK(p->linkGain() == 0.0f && tp::app::held(), "link_off: the commands not applied with Link On");
+    setLink(*p, false);
+    run(*p, 0.2);
+    CHECK(p->linkGain() == 1.0f && !silent(L, 128), "link_off: the level not restored at Link Off");
+    CHECK(!tp::app::held(), "link_off: the command's hold not released at Link Off");
+    // a ramp under way, then Off: full at once
+    setLink(*p, true);
+    fade(*p, 0, 8);
+    run(*p, 1.0);
+    CHECK(p->linkGain() < 1.0f && p->linkGain() > 0.0f, "link_off: no ramp under way (%g)", p->linkGain());
+    setLink(*p, false);
+    block(*p);
+    CHECK(p->linkGain() == 1.0f, "link_off: a ramp goes on with Link Off (%g)", p->linkGain());
+    drain(*p);
+}
+
+// SysEx delivered to the plugin: Harmony Link's own (an echo) and another maker's change nothing (the SDK hands the
+// plugin no SysEx at all; a 3-byte event with status F0 is not a note).
+void own_sysex_ignored()
+{
+    static char own[] = {(char)0xF0, 0x7D, 0x54, 0x50, 0x01, 0x01, 0x00, 0x00, (char)0xF7};
+    static char other[] = {(char)0xF0, 0x43, 0x10, 0x4C, 0x00, 0x00, 0x7E, 0x00, (char)0xF7};
+    auto sysex = [](ThirdPlanet& p, char* data, int n) {
+        VstMidiSysexEvent sx{};
+        sx.type = kVstSysExType, sx.byteSize = sizeof sx, sx.dumpBytes = n, sx.sysexDump = data;
+        VstMidiEvent m{};   // (a host that cuts SysEx into short events)
+        m.type = kVstMidiType, m.byteSize = sizeof m;
+        m.midiData[0] = data[0], m.midiData[1] = data[1], m.midiData[2] = data[2];
+        VstEvents ev{};
+        ev.numEvents = 2;
+        ev.events[0] = reinterpret_cast<VstEvent*>(&sx);
+        ev.events[1] = reinterpret_cast<VstEvent*>(&m);
+        p.internalAddMidi(&ev);
+    };
+    uint64_t h[3];
+    bool heldAfter[3];
+    for (int k = 0; k < 3; ++k)
+    {
+        auto p = make();
+        setLink(*p, true);
+        audioHash = 1469598103934665603ull;
+        run(*p, 1.0);
+        for (int i = 0; i < 20; ++i)
+        {
+            if (k == 1) sysex(*p, own, sizeof own);
+            if (k == 2) sysex(*p, other, sizeof other);
+            block(*p);
+        }
+        run(*p, 1.0);
+        h[k] = audioHash, heldAfter[k] = tp::app::held();
+        drain(*p);
+    }
+    CHECK(h[1] == h[0] && heldAfter[1] == heldAfter[0], "own_sysex: Harmony Link's SysEx changed the plugin");
+    CHECK(h[2] == h[0] && heldAfter[2] == heldAfter[0], "own_sysex: another maker's SysEx changed the plugin");
 }
 
 } // namespace
@@ -519,6 +775,12 @@ int main()
     ring_two_threads(true);
     ring_two_threads(false);
     sky_log_unchanged();
+    fade_reaches_target_in_bars();
+    fade_zero_bars_then_start_resets();
+    hold_command_sets_hold();
+    start_releases_link_hold_only();
+    link_off_ignores_commands();
+    own_sysex_ignored();
     std::printf(fails ? "FAILED (%d)\n" : "ALL PASSED\n", fails);
     return fails ? 1 : 0;
 }

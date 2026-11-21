@@ -558,6 +558,7 @@ public:
 #if TP_LINK
             linkWant(false);   // (no engine, nothing to tell: BYE; a Plan first when it is back)
             linkHave_ = false;
+            linkDrop();        // (commands dropped; the engine's hold is the owner's now: not touched)
 #endif
             if (!holding) sendBusy();
             return;
@@ -581,6 +582,9 @@ public:
             skyCarry_ = 0;
         }
         tp::app::setMaster((uint32_t)getInt(0) * 2048u / 100u);
+#if TP_LINK
+        linkCommands(ctx.transport);
+#endif
         midiIn(ctx);
         clock(ctx);
         render(ctx);
@@ -599,6 +603,7 @@ public:
     tp::link::LinkRing linkRing_;   // Harmony Link: the audio thread (watch) pushes, the link worker pops
     tp::link::Worker linkWorker_{linkRing_, &tp::link::loadAlsa, tp::link::systemClock()};   // (its thread: the constructor)
     bool linkSend_ = true;          // (tests: false keeps the worker idle, and the test is the ring's consumer)
+    float linkGain() const { return linkGain_; }   // (tests: the output gain the computer's FADE set)
 #endif
 
 private:
@@ -627,6 +632,7 @@ private:
         forgetHeld();   // (power_on let go of everything)
 #if TP_LINK
         linkHave_ = false;   // (Harmony Link: a Plan after every power-on, changed or not)
+        linkHold_ = kLinkHoldNone;   // (power-on let go of the hold)
 #endif
         clockRunning_ = false;
         lastTick_ = LLONG_MIN;
@@ -690,6 +696,9 @@ private:
                 case Kind::KeyMode:
                 case Kind::PadBase: releaseHeld(); break;   // (read where used; a pad held now meant something else)
                 case Kind::Switch:
+#if TP_LINK
+                    if (d.code == kSwHold) linkHold_ = kLinkHoldNone;   // (the hand's hold now, whoever set it before)
+#endif
                     setSwitch(d.code, v != 0);
                     settle(i, v);
                     break;
@@ -901,6 +910,9 @@ private:
             pos_ += n;
             done += n;
         }
+#if TP_LINK
+        if (linkFadeOn_ || linkGain_ < 1.0f) linkGainStage(ctx);   // (never entered without a FADE: the null path)
+#endif
     }
 
     // The screen's model, once a block: the app's readouts and what it logged since the last block (all of it in
@@ -932,6 +944,7 @@ private:
             }
 #if TP_LINK
         const bool link = linkOn();
+        linkWorker_.tick();   // (the worker's heartbeat stops if the blocks do)
         linkWant(link && linkSend_);
         if (link) linkCapture(events, in.numEvents, transport);
         else linkHave_ = false;
@@ -973,6 +986,128 @@ private:
         if (on == linkWant_) return;
         linkWant_ = on;
         linkWorker_.setEnabled(on);
+    }
+
+    // The computer's commands (spec 5.6), once a block before the clock and the render. Wait-free: the worker's
+    // atomics are read, and holdCmd is exchanged only when it holds a command.
+    //   - a transport START (the MPC's play, Sync on or off) puts the level back to full and releases a hold that a
+    //     command set, before this block's commands, so a FADE that comes with the START still counts;
+    //   - FADE(level, bars): from the gain where it is toward level/127 over bars of the host's bars (linkFade);
+    //   - HOLD(on): the hand's own setter, as the Hold switch (the MPC's Hold parameter follows through mirror(); the
+    //     SKY log says You). A START releases it only if the command set it: a hand's hold stays, a hold the hand
+    //     already had when HOLD(1) came stays the hand's, and the hand writing Hold takes it over;
+    //   - Link Off: commands are taken and dropped, never applied later; the level goes back to full and a hold a
+    //     command set is released.
+    void linkCommands(const mpc::Transport& t)
+    {
+        tp::link::Worker& w = linkWorker_;
+        const bool start = t.playing && !linkPlaying_;
+        linkPlaying_ = t.playing;
+        // (held() follows setHold a block late: a command's hold counts as let go only once it was seen held)
+        if (linkHold_ == kLinkHoldSet && tp::app::held()) linkHold_ = kLinkHoldSeen;
+        else if (linkHold_ == kLinkHoldSeen && !tp::app::held()) linkHold_ = kLinkHoldNone;   // (let go otherwise)
+        const int hold = w.holdCmd.load(std::memory_order_relaxed) < 0 ? -1 : w.holdCmd.exchange(-1, std::memory_order_acq_rel);
+        uint32_t seq = w.fadeSeq.load(std::memory_order_acquire);
+        if (!linkOn())
+        {
+            linkFadeSeen_ = seq;
+            linkFull();
+            return;
+        }
+        if (start) linkFull();
+        if (seq != linkFadeSeen_)
+            for (int tries = 0; tries < 4; ++tries)   // (a FADE written meanwhile: read again; else the next block)
+            {
+                const uint32_t level = w.fadeLevel.load(std::memory_order_relaxed);
+                const uint32_t bars = w.fadeBars.load(std::memory_order_relaxed);
+                std::atomic_thread_fence(std::memory_order_acquire);
+                const uint32_t again = w.fadeSeq.load(std::memory_order_relaxed);
+                if (again == seq)
+                {
+                    linkFadeSeen_ = seq;
+                    linkFade(level, bars, t);
+                    break;
+                }
+                seq = again;
+            }
+        if (hold == 1 && !tp::app::held())
+        {
+            tp::app::setHold(true);
+            if (linkHold_ == kLinkHoldNone) linkHold_ = kLinkHoldSet;
+        }
+        else if (hold == 0)
+        {
+            tp::app::setHold(false);
+            linkHold_ = kLinkHoldNone;
+        }
+    }
+    // Full level, and a hold a command set released (START, Link Off).
+    void linkFull()
+    {
+        linkGain_ = 1.0f;
+        linkFadeOn_ = false;
+        if (linkHold_ != kLinkHoldNone) tp::app::setHold(false);
+        linkHold_ = kLinkHoldNone;
+    }
+    // No engine (another instance owns it): commands dropped, full level, and the hold forgotten without touching it.
+    void linkDrop()
+    {
+        tp::link::Worker& w = linkWorker_;
+        if (w.holdCmd.load(std::memory_order_relaxed) >= 0) w.holdCmd.exchange(-1, std::memory_order_acq_rel);
+        linkFadeSeen_ = w.fadeSeq.load(std::memory_order_acquire);
+        linkGain_ = 1.0f;
+        linkFadeOn_ = false;
+        linkHold_ = kLinkHoldNone;
+    }
+    // FADE: the ramp's length in beats, from the host's time signature now (4/4 if it gives none, as barReady()). It
+    // is equal power: the gain is cos of an angle that moves evenly from acos(gain now) to acos(target), so a fade out
+    // from full is cos(t*pi/2) and a fade in from silence sin(t*pi/2). bars = 0: at once.
+    void linkFade(uint32_t level, uint32_t bars, const mpc::Transport& t)
+    {
+        const float to = level >= 127 ? 1.0f : (float)level / 127.0f;
+        linkFadeTo_ = to;
+        if (bars == 0 || linkGain_ == to)
+        {
+            linkGain_ = to;
+            linkFadeOn_ = false;
+            return;
+        }
+        double barLen = t.timeSigDenominator > 0 ? t.timeSigNumerator * 4.0 / t.timeSigDenominator : 4.0;
+        if (!(barLen >= 0.25 && barLen <= 64.0)) barLen = 4.0;
+        const float from = linkGain_ < 0.0f ? 0.0f : linkGain_ > 1.0f ? 1.0f : linkGain_;
+        linkFadeA0_ = std::acos((double)from);
+        linkFadeA1_ = std::acos((double)to);
+        linkFadeLen_ = (double)bars * barLen;
+        linkFadeAt_ = 0.0;
+        linkFadeOn_ = true;
+    }
+    // The gain after the engine, like the MPC's track fader. The ramp runs in the host's beats at its tempo now
+    // (120 if it gives none), sample by sample, whether the MPC plays or not: a FADE with the MPC stopped still takes
+    // its bars. (Not from ppqPos: it jumps back when the sequence loops.) The end is the target exactly, so a fade back
+    // to full leaves the stage.
+    void linkGainStage(mpc::ProcessContext& ctx)
+    {
+        float* outL = ctx.outputs[0];
+        float* outR = ctx.numOutputs > 1 ? ctx.outputs[1] : nullptr;
+        const mpc::Transport& t = ctx.transport;
+        const double bpm = t.tempoValid && t.bpm >= 20.0 && t.bpm <= 999.0 ? t.bpm : 120.0;
+        const double step = bpm / 60.0 / 44100.0;   // beats a sample
+        for (int i = 0; i < ctx.numFrames; ++i)
+        {
+            if (linkFadeOn_)
+            {
+                linkFadeAt_ += step;
+                if (linkFadeAt_ >= linkFadeLen_)
+                {
+                    linkGain_ = linkFadeTo_;
+                    linkFadeOn_ = false;
+                }
+                else
+                    linkGain_ = (float)std::cos(linkFadeA0_ + (linkFadeA1_ - linkFadeA0_) * (linkFadeAt_ / linkFadeLen_));
+            }
+            outL[i] *= linkGain_;
+            if (outR != nullptr) outR[i] *= linkGain_;
+        }
     }
 #endif
 
@@ -1226,6 +1361,14 @@ private:
     tp::link::PlanState linkLast_{};   // Harmony Link: the plan last pushed (audio thread)
     bool linkHave_ = false;            // ... valid: false while Link is off, so turning it on pushes one
     bool linkWant_ = false;            // what the link's thread was last told (audio thread)
+    float linkGain_ = 1.0f;            // the computer's FADE: the output's gain (audio thread, as all below)
+    bool linkFadeOn_ = false;          // ... a ramp under way: from angle A0 to A1 (gain = cos), Len beats long
+    float linkFadeTo_ = 1.0f;          // ... its end, exactly
+    double linkFadeA0_ = 0.0, linkFadeA1_ = 0.0, linkFadeLen_ = 1.0, linkFadeAt_ = 0.0;
+    uint32_t linkFadeSeen_ = 0;        // the worker's fadeSeq last taken
+    bool linkPlaying_ = false;         // the MPC played last block (a START is its rise)
+    enum : uint8_t { kLinkHoldNone, kLinkHoldSet, kLinkHoldSeen };   // a hold a command set: not yet held(), held()
+    uint8_t linkHold_ = kLinkHoldNone;
 #endif
 
     // the notes held, and what each one's press did

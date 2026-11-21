@@ -7,7 +7,8 @@
 //     subscribe to it, so nothing echoes) and a port to listen on, and connects both to the USB MIDI function
 //     ("f_midi" port 0, the computer's "MPC Live III Port 1"). No f_midi: it looks again every 2 s;
 //   - every 2 ms takes what the ring has: Events go out at once, in order; of the Plans only the newest, at most 20 a
-//     second; with nothing new the last Plan goes out again every 2 s (the heartbeat);
+//     second; with nothing new the last Plan goes out again every 2 s (the heartbeat), while the audio thread runs
+//     (tick(): no block for 500 ms, no heartbeat);
 //   - a send error, or f_midi gone or changed (looked up every 2 s), ends the client; a new one is made and
 //     connected, no sooner than 2 s after the last connection; then the newest Plan goes out first;
 //   - reads the computer's commands (FADE, HOLD), which may come in pieces, into the atomics below;
@@ -15,7 +16,7 @@
 // Opening the link drops whatever the ring still held from before and asks the audio thread for a fresh Plan
 // (takeWantPlan), so a Plan always follows Link On.
 //
-// The audio thread's whole contact: the ring's push, setEnabled, takeWantPlan and the command atomics. All wait-free
+// The audio thread's whole contact: the ring's push, setEnabled, takeWantPlan, tick and the command atomics. All wait-free
 // (lock-free 32-bit atomics); it never starts, stops, joins or waits for the thread.
 // (Defined in link_worker.cpp only with TP_LINK=1.)
 #pragma once
@@ -49,7 +50,8 @@ public:
     Worker& operator=(const Worker&) = delete;
 
     // The thread. Not for the audio thread: start() makes it, stop() has it send BYE and close, and joins it.
-    // Both from one thread at a time; start() while running and stop() while stopped do nothing.
+    // Both from one thread at a time; start() while running and stop() while stopped do nothing. If the system gives
+    // no thread (std::thread throws), start() returns all the same: there is no worker, the link does nothing.
     void start();
     void stop();
 
@@ -71,8 +73,18 @@ public:
     enum State : uint32_t { Off, NoAlsa, Searching, Connected };
     std::atomic<uint32_t> state{Off};
     std::atomic<uint32_t> sentCount{0}, sendErrors{0}, takenCount{0};   // messages sent, failed sends, ring items taken
+    bool running() const { return thread_.joinable(); }   // (false also when the system gave no thread: start())
+    bool failStart = false;   // (tests: start() as if the system had no thread to give)
 
-    static constexpr int kPollMs = 2, kIdleMs = 20, kPlanMinMs = 50, kHeartbeatMs = 2000, kRetryMs = 2000;
+    // The audio thread, once a block: it is running. No block for kStaleMs (the MPC stopped calling the plugin) and
+    // the heartbeat stops, so the computer sees the plan go stale; it resumes with the blocks.
+    void tick() { blocks.store(blocks.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed); }
+    std::atomic<uint32_t> blocks{0};
+
+    // kPollMs: the poll while the link is on with libasound (connected or searching); kNoAlsaMs: with none, only the
+    // ring's drain; kIdleMs: Link Off (quit_ is looked at every pass, so stop() joins within about this).
+    static constexpr int kPollMs = 2, kNoAlsaMs = 20, kIdleMs = 100, kPlanMinMs = 50, kHeartbeatMs = 2000,
+                         kRetryMs = 2000, kStaleMs = 500;
 
 private:
     enum class Sent { Ok, Busy, Failed };
@@ -102,6 +114,8 @@ private:
     int outPort_ = -1, inPort_ = -1;
     int target_ = -1;          // f_midi's client while connected; -1: not connected
     double nextTry_ = 0.0, nextCheck_ = 0.0, connectedAt_ = -1e18, planAt_ = -1e18;
+    uint32_t blocksSeen_ = 0;  // the audio thread's block count last seen, and when it moved
+    double blocksAt_ = -1e18;
     PlanState plan_{};         // the newest Plan taken since the link opened
     bool havePlan_ = false, planDue_ = false;
     uint8_t seq_ = 0;          // the running 7-bit counter of the messages

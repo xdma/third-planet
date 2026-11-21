@@ -8,6 +8,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <system_error>
 
 namespace tp::link {
 
@@ -44,7 +45,16 @@ void Worker::start()
 {
     if (thread_.joinable()) return;
     quit_.store(false, std::memory_order_release);
-    thread_ = std::thread([this] { run(); });
+    try
+    {
+        if (failStart) throw std::system_error(std::make_error_code(std::errc::resource_unavailable_try_again));
+        thread_ = std::thread([this] { run(); });
+    }
+    catch (const std::system_error&)
+    {
+        // (no thread: the plugin works on without the link; Link On pushes into a ring no one takes, dropped and
+        // counted, and stop() has nothing to join)
+    }
 }
 
 void Worker::stop()
@@ -66,7 +76,7 @@ void Worker::run()
         }
         if (!open_) openLink();
         poll();
-        clock_.sleepMs(api_.ok ? kPollMs : kIdleMs);
+        clock_.sleepMs(api_.ok ? kPollMs : kNoAlsaMs);   // (2 ms with libasound; with none only the ring's drain)
     }
     if (open_) closeLink();
 }
@@ -87,6 +97,8 @@ void Worker::openLink()
     inOn_ = false;
     nextTry_ = clock_.nowMs();
     connectedAt_ = planAt_ = -1e18;
+    blocksSeen_ = blocks.load(std::memory_order_relaxed);
+    blocksAt_ = nextTry_;   // (the audio thread just turned the link on: it runs)
     open_ = true;
     state.store(api_.ok ? Searching : NoAlsa, std::memory_order_relaxed);
     wantPlan_.store(true, std::memory_order_release);
@@ -122,6 +134,13 @@ void Worker::poll()
         }
     }
 
+    const uint32_t b = blocks.load(std::memory_order_relaxed);
+    if (b != blocksSeen_)
+    {
+        blocksSeen_ = b;
+        blocksAt_ = now;
+    }
+
     Item it;
     uint8_t msg[kMaxMsg];
     uint32_t taken = 0;
@@ -138,7 +157,7 @@ void Worker::poll()
     if (taken) takenCount.store(takenCount.load(std::memory_order_relaxed) + taken, std::memory_order_relaxed);
 
     if (target_ >= 0 && havePlan_ &&
-        ((planDue_ && now - planAt_ >= kPlanMinMs) || now - planAt_ >= kHeartbeatMs))
+        ((planDue_ && now - planAt_ >= kPlanMinMs) || (now - planAt_ >= kHeartbeatMs && now - blocksAt_ < kStaleMs)))
     {
         if (send(msg, encodePlan(plan_, nextSeq(), msg), now) == Sent::Ok)
         {

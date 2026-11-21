@@ -181,6 +181,8 @@ struct StepClock : Clock
     long long t = 0;          // ms
     long sleeps = 0, allowed = 0;
     bool free = false;
+    std::atomic<uint32_t>* blocks = nullptr;   // the worker's block count: the audio thread's blocks, one a pass
+    std::atomic<bool> ticking{true};           // ... while true (false: the audio thread stopped)
     double nowMs() override { std::lock_guard<std::mutex> l(m); return (double)t; }
     void sleepMs(int ms) override
     {
@@ -189,6 +191,7 @@ struct StepClock : Clock
         cv.notify_all();
         cv.wait(l, [&] { return free || allowed >= sleeps; });
         t += ms;
+        if (blocks && ticking.load()) blocks->fetch_add(1);
     }
     // (test) the worker is asleep after its first pass
     void settle() { std::unique_lock<std::mutex> l(m); cv.wait(l, [&] { return sleeps > allowed; }); }
@@ -222,6 +225,7 @@ struct Rig
         SeqApi a = fakeApi();
         a.ok = ok;
         w = std::make_unique<Worker>(ring, a, clock);
+        clock.blocks = &w->blocks;
     }
     void start() { w->start(); clock.settle(); }
     void stop() { clock.release(); w->stop(); }
@@ -726,6 +730,95 @@ void load_alsa()
           a.nonblock && a.input && a.findClient, "load_alsa: ok with a function missing");
 }
 
+
+// The audio thread stopped (no block for kStaleMs): no heartbeat, so the computer sees the plan go stale; it comes back
+// with the blocks.
+void heartbeat_stops_without_blocks()
+{
+    Rig r;
+    r.start();
+    r.plan(planOf(4));
+    r.clock.step();
+    CHECK(sent().size() == 1, "stale_heartbeat: the Plan was not sent");
+    r.clock.ticking = false;
+    r.clock.ms(10000);
+    CHECK(sent().size() == 1, "stale_heartbeat: %d heartbeats in 10 s with no block", (int)sent().size() - 1);
+    r.clock.ticking = true;   // (the next heartbeat at once: the last was long ago)
+    r.clock.ms(1900);
+    const auto s = sent();
+    CHECK(s.size() == 2 && isPlan(s.back(), planOf(4)), "stale_heartbeat: %d heartbeats once blocks came back, not 1",
+          (int)s.size() - 1);
+    r.clock.ticking = false;   // (blocks stop again: the heartbeat 0.1 s later still goes, as the blocks were fresh)
+    r.clock.ms(1700);
+    CHECK(sent().size() == 3, "stale_heartbeat: %d messages, not a heartbeat 2 s after the last with blocks 0.1 s ago",
+          (int)sent().size());
+    r.clock.ms(6000);
+    CHECK(sent().size() == 3, "stale_heartbeat: heartbeats after the blocks stopped again");
+}
+
+// Link Off: the thread sleeps kIdleMs (100 ms) a pass, and stop() still joins it about as fast. With no libasound the
+// ring is drained every kNoAlsaMs.
+void idle_sleeps_100ms()
+{
+    {
+        Rig r;
+        r.w->setEnabled(false);
+        r.start();
+        const long long t0 = r.clock.t;
+        r.clock.step(10);
+        CHECK(r.clock.t - t0 == 10 * Worker::kIdleMs && Worker::kIdleMs == 100, "idle: %lld ms in 10 idle passes",
+              r.clock.t - t0);
+    }
+    {
+        Rig r(false);
+        r.start();
+        const long long t0 = r.clock.t;
+        r.clock.step(10);
+        CHECK(r.clock.t - t0 == 10 * Worker::kNoAlsaMs && Worker::kNoAlsaMs <= 20, "idle: %lld ms in 10 drains with no ALSA",
+              r.clock.t - t0);
+    }
+    using clk = std::chrono::steady_clock;
+    LinkRing ring;
+    Worker w(ring, fakeApi(), systemClock());
+    w.setEnabled(false);
+    w.start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    const auto t0 = clk::now();
+    w.stop();
+    const double ms = std::chrono::duration<double, std::milli>(clk::now() - t0).count();
+    CHECK(ms < 150.0, "idle: stop() took %.0f ms with Link Off", ms);
+}
+
+// The system has no thread to give (std::thread throws; every instance makes one, host scans included): start()
+// returns, the link does nothing, stop() and the destructor are fine, and a later start() may still succeed.
+void start_survives_no_thread()
+{
+    fake.reset();
+    LinkRing ring;
+    StepClock clock;
+    clock.release();
+    {
+        Worker w(ring, fakeApi(), clock);
+        w.failStart = true;
+        bool threw = false;
+        try { w.start(); } catch (...) { threw = true; }
+        CHECK(!threw, "no_thread: start() threw");
+        CHECK(!w.running(), "no_thread: a thread anyway");
+        Item it{};
+        it.kind = Item::Plan;
+        ring.push(it);
+        CHECK(!w.takeWantPlan() && w.state.load() == Worker::Off, "no_thread: the link opened");
+        w.stop();   // (nothing to join)
+        w.failStart = false;
+        w.start();
+        CHECK(w.running(), "no_thread: no thread when the system has one again");
+        for (int i = 0; i < 2000 && w.state.load() != Worker::Connected; ++i)
+            std::this_thread::sleep_for(std::chrono::microseconds(500));
+        CHECK(w.state.load() == Worker::Connected, "no_thread: the link did not open on the second start");
+    }   // (the destructor joins)
+    CHECK(locked([] { return fake.opens == fake.closes; }), "no_thread: the client left open");
+}
+
 } // namespace
 
 int main()
@@ -747,6 +840,9 @@ int main()
     enable_toggle_stress();
     no_alsa_degrades();
     load_alsa();
+    heartbeat_stops_without_blocks();
+    idle_sleeps_100ms();
+    start_survives_no_thread();
     if (fails) { std::printf("%d FAILED\n", fails); return 1; }
     std::printf("test_link_worker: all passed\n");
     return 0;
