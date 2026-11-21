@@ -47,9 +47,9 @@ enum Wrap {
     kOvershoot,   // the position runs 0.05 beats past the loop's end over several blocks, then jumps back 8 beats
     kSnap         // the block after the one that crosses the loop's end starts at 0 exactly
 };
-// Returns the engine's sixteenths since the start minus the host's (its position with the wraps undone, in 16ths):
-// 0 is in step, +1 a sixteenth ahead. `burst`: the most sixteenths one block gave.
-double loopDrift(double secs, int n, Wrap wrap, int& burst, bool& ext)
+// Returns the engine's sixteenths since the start minus the host's (its position with the wraps undone, in whole
+// 16ths): 0 is in step, +1 a sixteenth ahead. `burst`: the most sixteenths one block gave.
+int loopDrift(double secs, int n, Wrap wrap, int& burst, bool& ext)
 {
     float* outs[2] = {L, R};
     ti.flags &= ~kVstTransportPlaying;     // (stop first, so the only jumps back are the loop's wraps)
@@ -58,13 +58,13 @@ double loopDrift(double secs, int n, Wrap wrap, int& burst, bool& ext)
     ti.flags |= kVstTransportPlaying | kVstBarsValid;
     const double loopBeats = 8.0;
     long wraps = 0;
-    uint32_t bars0 = 0, was = 0;
+    uint32_t was = en_bars;
     burst = 0;
     for (long done = 0; done < (long)(secs * 44100); done += n)
     {
         fx->processReplacing(fx, nullptr, outs, n);
-        if (done == 0) bars0 = was = en_bars - 1;   // (the Start's block: the piece from the top, its first sixteenth)
-        if ((int)(en_bars - was) > burst) burst = (int)(en_bars - was);
+        // (the Start puts the engine's count back to 0, in this block or the next; from then on it only goes up)
+        if (en_bars > was && (int)(en_bars - was) > burst) burst = (int)(en_bars - was);
         was = en_bars;
         ti.ppqPos += n * ti.tempo / 60.0 / 44100.0;
         if (wrap == kCarry && ti.ppqPos >= loopBeats) ti.ppqPos -= loopBeats, ++wraps;
@@ -73,7 +73,8 @@ double loopDrift(double secs, int n, Wrap wrap, int& burst, bool& ext)
         ti.barStartPos = 4.0 * std::floor(ti.ppqPos / 4.0);   // (4/4)
     }
     ext = tp::app::playing() && tp::app::external();
-    return (double)(en_bars - bars0) - ((double)wraps * loopBeats + ti.ppqPos) * 4.0;
+    // (the engine's count since the Start includes the sixteenth at the host's position 0)
+    return (int)en_bars - 1 - (int)std::floor(((double)wraps * loopBeats + ti.ppqPos) * 4.0 + 1e-6);
 }
 
 } // namespace
@@ -155,18 +156,23 @@ int main()
     // sixteenths in one block (no burst of clocks), and the external clock is never lost.
     {
         const char* const kWrapName[] = {"no wrap", "carry", "overshoot", "snap to 0"};
+        const auto loops = [&](int n, Wrap w) {
+            int burst = 0;
+            bool ext = false;
+            // (480 s and half a sixteenth: the count is read in the middle of a sixteenth, not on its edge)
+            const int d = loopDrift(480.0 + 0.5 * 15.0 / 124.0, n, w, burst, ext);
+            std::printf("T-1757: 480 s, blocks of %d, %s: the engine %+d sixteenths from the host\n", n, kWrapName[w], d);
+            CHECK(ext, "T-1757: external clock lost (%s, blocks of %d)", kWrapName[w], n);
+            CHECK(d >= -1 && d <= 1, "T-1757: 480 s of 2-bar loops (%s, blocks of %d): the engine is %+d sixteenths from the host",
+                  kWrapName[w], n, d);
+            CHECK(burst <= 1, "T-1757: %d sixteenths in one block (%s, blocks of %d)", burst, kWrapName[w], n);
+        };
         for (int n : {128, 512})
             for (Wrap w : {kNoWrap, kCarry, kOvershoot, kSnap})
-            {
-                int burst = 0;
-                bool ext = false;
-                const double d = loopDrift(480.0, n, w, burst, ext);
-                std::printf("T-1757: 480 s, blocks of %d, %s: the engine %+.2f sixteenths from the host\n", n, kWrapName[w], d);
-                CHECK(ext, "T-1757: external clock lost (%s, blocks of %d)", kWrapName[w], n);
-                CHECK(d >= -1.0 && d <= 1.0, "T-1757: 480 s of 2-bar loops (%s, blocks of %d): the engine is %+.2f sixteenths from the host",
-                      kWrapName[w], n, d);
-                CHECK(burst <= 1, "T-1757: %d sixteenths in one block (%s, blocks of %d)", burst, kWrapName[w], n);
-            }
+                loops(n, w);
+        // (blocks of 508 at 124 BPM: the block that crosses the loop's end runs 0.54 of a clock past it, every wrap.
+        // Taking the jump to the nearest clock would count it as 193 and send the loop's first clock twice)
+        loops(508, kSnap);
     }
 
     // A locate back while playing (not a loop: 26.7 beats, no whole number of clocks): the clock goes on from there,
