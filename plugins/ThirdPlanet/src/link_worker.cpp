@@ -288,12 +288,7 @@ void Worker::feed(const uint8_t* bytes, unsigned len)
             inOn_ = false;
             Command c;
             if (inOver_ || !decodeCommand(in_, inLen_, c)) continue;
-            if (c.type == Command::Fade)
-            {
-                fadeLevel.store(c.level, std::memory_order_relaxed);
-                fadeBars.store(c.bars, std::memory_order_relaxed);
-                fadeSeq.fetch_add(1, std::memory_order_release);   // (last: see link_worker.h)
-            }
+            if (c.type == Command::Fade) postFade(c.level, c.bars);
             else if (c.type == Command::Hold)
                 holdCmd.store(c.hold ? 1 : 0, std::memory_order_release);
         }

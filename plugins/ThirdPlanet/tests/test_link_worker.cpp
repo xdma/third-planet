@@ -470,14 +470,14 @@ void reads_fade_command()
 {
     Rig r;
     r.start();
-    const uint32_t seq0 = r.w->fadeSeq.load();
-    CHECK(r.w->fadeLevel.load() == 127 && r.w->fadeBars.load() == 0, "reads_fade_command: the level is not full at first");
+    const uint32_t seq0 = Worker::fadeCount(r.w->fadeCmd.load());
+    CHECK(Worker::fadeLevel(r.w->fadeCmd.load()) == 127 && Worker::fadeBars(r.w->fadeCmd.load()) == 0, "reads_fade_command: the level is not full at first");
     queueInput({0xF0, 0x7D, 0x54, 0x50, 0x01, 0x10});
     queueInput({0x00, 0x00, 0x10, 0x00, 0xF7});
     r.clock.step();
-    CHECK(r.w->fadeLevel.load() == 0, "reads_fade_command: level %u, not 0", r.w->fadeLevel.load());
-    CHECK(r.w->fadeBars.load() == 16, "reads_fade_command: bars %u, not 16", r.w->fadeBars.load());
-    CHECK(r.w->fadeSeq.load() == seq0 + 1, "reads_fade_command: fadeSeq moved by %u", r.w->fadeSeq.load() - seq0);
+    CHECK(Worker::fadeLevel(r.w->fadeCmd.load()) == 0, "reads_fade_command: level %u, not 0", Worker::fadeLevel(r.w->fadeCmd.load()));
+    CHECK(Worker::fadeBars(r.w->fadeCmd.load()) == 16, "reads_fade_command: bars %u, not 16", Worker::fadeBars(r.w->fadeCmd.load()));
+    CHECK(Worker::fadeCount(r.w->fadeCmd.load()) == seq0 + 1, "reads_fade_command: fadeSeq moved by %u", Worker::fadeCount(r.w->fadeCmd.load()) - seq0);
     CHECK(r.w->holdCmd.load() == -1, "reads_fade_command: a Hold out of a FADE");
 
     // one byte an event, the Mac's clock between the pieces
@@ -488,8 +488,8 @@ void reads_fade_command()
         queueInput({}, 36);   // (SND_SEQ_EVENT_CLOCK)
     }
     r.clock.step();
-    CHECK(r.w->fadeLevel.load() == 0x40 && r.w->fadeBars.load() == 4 && r.w->fadeSeq.load() == seq0 + 2,
-          "reads_fade_command: a FADE one byte at a time: level %u bars %u", r.w->fadeLevel.load(), r.w->fadeBars.load());
+    CHECK(Worker::fadeLevel(r.w->fadeCmd.load()) == 0x40 && Worker::fadeBars(r.w->fadeCmd.load()) == 4 && Worker::fadeCount(r.w->fadeCmd.load()) == seq0 + 2,
+          "reads_fade_command: a FADE one byte at a time: level %u bars %u", Worker::fadeLevel(r.w->fadeCmd.load()), Worker::fadeBars(r.w->fadeCmd.load()));
 
     // not ours, malformed, cut off, too long: nothing moves
     queueInput({0xF0, 0x00, 0x20, 0x3C, 0x01, 0x10, 0x00, 0x00, 0x10, 0x00, 0xF7});   // (another maker's)
@@ -502,14 +502,33 @@ void reads_fade_command()
     queueInput(big);                                                                   // (over kMaxMsg)
     queueInput({0x00, 0x00, 0x10, 0x00, 0xF7});                                        // (a tail with no start)
     r.clock.step();
-    CHECK(r.w->fadeSeq.load() == seq0 + 2, "reads_fade_command: a malformed message moved fadeSeq");
-    CHECK(r.w->fadeLevel.load() == 0x40 && r.w->fadeBars.load() == 4, "reads_fade_command: a malformed message moved the level");
+    CHECK(Worker::fadeCount(r.w->fadeCmd.load()) == seq0 + 2, "reads_fade_command: a malformed message moved fadeSeq");
+    CHECK(Worker::fadeLevel(r.w->fadeCmd.load()) == 0x40 && Worker::fadeBars(r.w->fadeCmd.load()) == 4, "reads_fade_command: a malformed message moved the level");
     // ... and the reader is whole again after them
     queueInput({0xF0, 0x7D, 0x54, 0x50, 0x01, 0x10, 0x00, 0x7F, 0x00, 0x00, 0xF7});
     r.clock.step();
-    CHECK(r.w->fadeLevel.load() == 127 && r.w->fadeBars.load() == 0 && r.w->fadeSeq.load() == seq0 + 3,
+    CHECK(Worker::fadeLevel(r.w->fadeCmd.load()) == 127 && Worker::fadeBars(r.w->fadeCmd.load()) == 0 && Worker::fadeCount(r.w->fadeCmd.load()) == seq0 + 3,
           "reads_fade_command: no FADE read after the malformed ones");
     CHECK(sent().empty(), "reads_fade_command: a command made the worker send");
+    // two FADEs in one pass: the reader's one word is the second, whole (never one's level with the other's bars),
+    // and the same FADE again is a new word
+    const uint32_t w0 = r.w->fadeCmd.load();
+    queueInput({0xF0, 0x7D, 0x54, 0x50, 0x01, 0x10, 0x00, 0x00, 0x7F, 0x7F, 0xF7});   // (level 0, bars 16383)
+    queueInput({0xF0, 0x7D, 0x54, 0x50, 0x01, 0x10, 0x00, 0x7F, 0x02, 0x00, 0xF7});   // (level 127, bars 2)
+    r.clock.step();
+    const uint32_t w1 = r.w->fadeCmd.load();
+    CHECK(Worker::fadeLevel(w1) == 127 && Worker::fadeBars(w1) == 2 && Worker::fadeCount(w1) == Worker::fadeCount(w0) + 2,
+          "reads_fade_command: two FADEs in a pass: level %u bars %u", Worker::fadeLevel(w1), Worker::fadeBars(w1));
+    queueInput({0xF0, 0x7D, 0x54, 0x50, 0x01, 0x10, 0x00, 0x7F, 0x02, 0x00, 0xF7});
+    r.clock.step();
+    const uint32_t w2 = r.w->fadeCmd.load();
+    CHECK(w2 != w1 && Worker::fadeLevel(w2) == 127 && Worker::fadeBars(w2) == 2, "reads_fade_command: the same FADE again is not a new word");
+    // the count goes round in its 11 bits; the level and the bars stay whole
+    for (int i = 0; i < 2100; ++i)
+        r.w->postFade(5, 16383);
+    const uint32_t w3 = r.w->fadeCmd.load();
+    CHECK(Worker::fadeLevel(w3) == 5 && Worker::fadeBars(w3) == 16383 && Worker::fadeCount(w3) < 2048,
+          "reads_fade_command: after 2100 FADEs: level %u bars %u count %u", Worker::fadeLevel(w3), Worker::fadeBars(w3), Worker::fadeCount(w3));
 }
 
 void reads_hold_command()
@@ -527,7 +546,7 @@ void reads_hold_command()
     queueInput({0x00, 0xF7});
     r.clock.step();
     CHECK(r.w->holdCmd.load() == 0, "reads_hold_command: holdCmd %d, not 0 (off)", r.w->holdCmd.load());
-    CHECK(r.w->fadeSeq.load() == 0, "reads_hold_command: a FADE out of a HOLD");
+    CHECK(Worker::fadeCount(r.w->fadeCmd.load()) == 0, "reads_hold_command: a FADE out of a HOLD");
 }
 
 // What was left in the ring before the link opened is not sent; a fresh Plan is asked of the audio thread

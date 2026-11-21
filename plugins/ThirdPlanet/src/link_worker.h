@@ -64,9 +64,21 @@ public:
     }
 
     // Commands for the audio thread, written by the worker.
-    // FADE: fadeLevel (0..127) and fadeBars (0..16383) are written first, then fadeSeq goes up by one: a reader that
-    // sees fadeSeq change reads level and bars after it (and again if fadeSeq moved meanwhile).
-    std::atomic<uint32_t> fadeSeq{0}, fadeLevel{127}, fadeBars{0};
+    // FADE: one word, so a reader never sees the level of one FADE with the bars of another: the level (0..127) in
+    // bits 0..6, the bars (0..16383) in bits 7..20 and a count of the FADEs taken (11 bits, going round) above them.
+    // A new FADE is a new word, the same level and bars again too. The audio thread only loads it.
+    static constexpr uint32_t kFadeNone = 127;   // (full level, at once, count 0: before any FADE)
+    static constexpr uint32_t fadeLevel(uint32_t cmd) { return cmd & 0x7Fu; }
+    static constexpr uint32_t fadeBars(uint32_t cmd) { return cmd >> 7 & 0x3FFFu; }
+    static constexpr uint32_t fadeCount(uint32_t cmd) { return cmd >> 21; }
+    std::atomic<uint32_t> fadeCmd{kFadeNone};
+    // A FADE taken (the worker's thread; a test in its place): one writer at a time.
+    void postFade(uint32_t level, uint32_t bars)
+    {
+        const uint32_t count = fadeCount(fadeCmd.load(std::memory_order_relaxed)) + 1;
+        fadeCmd.store((level > 127 ? 127 : level) | (bars > 16383 ? 16383 : bars) << 7 | count << 21,
+                      std::memory_order_release);
+    }
     std::atomic<int> holdCmd{-1};   // -1 none, 0 off, 1 on; the audio thread exchanges it with -1
 
     // What the thread is doing (to look at; nothing depends on it).

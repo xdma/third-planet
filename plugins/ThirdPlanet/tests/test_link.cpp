@@ -510,10 +510,7 @@ void worker_takes_the_ring()
 // ---- the computer's commands (spec 5.6), written as the worker writes them ----
 void fade(ThirdPlanet& p, int level, int bars)
 {
-    tp::link::Worker& w = p.linkWorker_;
-    w.fadeLevel.store((uint32_t)level, std::memory_order_relaxed);
-    w.fadeBars.store((uint32_t)bars, std::memory_order_relaxed);
-    w.fadeSeq.fetch_add(1, std::memory_order_release);
+    p.linkWorker_.postFade((uint32_t)level, (uint32_t)bars);
 }
 void holdCommand(ThirdPlanet& p, bool on) { p.linkWorker_.holdCmd.store(on ? 1 : 0, std::memory_order_release); }
 void setPlaying(bool on)
@@ -719,6 +716,125 @@ void link_off_ignores_commands()
     drain(*p);
 }
 
+// A hold the computer's HOLD set or released (and the release at START) is not sent back to it as the hand's EVENT:
+// the PLAN's held flag shows it. The SKY log still says it, and the hand's own Hold is still an EVENT.
+int holdEvents(const std::vector<Item>& v, int to = -1)
+{
+    int n = 0;
+    for (const Item& it : v)
+        n += it.kind == Item::Event && it.ev.who == tp::app::kWhoYou && it.ev.what == tp::app::kEvHold &&
+             (to < 0 || it.ev.to == to);
+    return n;
+}
+bool lastPlanHeld(const std::vector<Item>& v, bool& held)
+{
+    bool any = false;
+    for (const Item& it : v)
+        if (it.kind == Item::Plan) any = true, held = it.plan.held;
+    return any;
+}
+void hold_command_not_echoed()
+{
+    auto p = make();
+    setLink(*p, true);
+    run(*p, 1.0);
+    drain(*p);
+    bool held = false;
+    holdCommand(*p, true);
+    run(*p, 0.1);
+    std::vector<Item> v = drain(*p);
+    CHECK(tp::app::held(), "hold_not_echoed: the command did not hold");
+    CHECK(holdEvents(v) == 0, "hold_not_echoed: HOLD(1) came back as %d EVENTs", holdEvents(v));
+    CHECK(lastPlanHeld(v, held) && held, "hold_not_echoed: no PLAN with held after HOLD(1)");
+    CHECK(std::string(p->sky().logText(0)).find("Hold") != std::string::npos, "hold_not_echoed: the SKY log says \"%s\", not the hold",
+          p->sky().logText(0));
+    holdCommand(*p, false);
+    run(*p, 0.1);
+    v = drain(*p);
+    CHECK(!tp::app::held(), "hold_not_echoed: HOLD(0) did not release");
+    CHECK(holdEvents(v) == 0, "hold_not_echoed: HOLD(0) came back as %d EVENTs", holdEvents(v));
+    CHECK(lastPlanHeld(v, held) && !held, "hold_not_echoed: no PLAN without held after HOLD(0)");
+    // HOLD(0) with nothing held does nothing, and the hand's Hold right after it is still an EVENT
+    holdCommand(*p, false);
+    block(*p);
+    p->setNormalised(idx("hold"), 1.0f);
+    run(*p, 0.1);
+    v = drain(*p);
+    CHECK(holdEvents(v, 1) == 1 && holdEvents(v) == 1, "hold_not_echoed: the hand's Hold after a HOLD(0): %d EVENTs, not 1", holdEvents(v));
+    p->setNormalised(idx("hold"), 0.0f);
+    run(*p, 0.1);
+    v = drain(*p);
+    CHECK(holdEvents(v, 0) == 1 && holdEvents(v) == 1, "hold_not_echoed: the hand's Hold off: %d EVENTs, not 1", holdEvents(v));
+    // the hand's Hold in the block after the command's: one EVENT, the hand's
+    holdCommand(*p, true);
+    block(*p);
+    p->setNormalised(idx("hold"), 0.0f);
+    run(*p, 0.1);
+    v = drain(*p);
+    CHECK(holdEvents(v, 0) == 1 && holdEvents(v) == 1, "hold_not_echoed: the hand's Hold off a block after HOLD(1): %d EVENTs, not 1",
+          holdEvents(v));
+    // the release at START of a hold the command set: no EVENT; then the hand's, an EVENT again
+    holdCommand(*p, true);
+    run(*p, 0.1);
+    drain(*p);
+    setPlaying(true);
+    run(*p, 0.1);
+    v = drain(*p);
+    CHECK(!tp::app::held(), "hold_not_echoed: START did not release the command's hold");
+    CHECK(holdEvents(v) == 0, "hold_not_echoed: the release at START came back as %d EVENTs", holdEvents(v));
+    CHECK(lastPlanHeld(v, held) && !held, "hold_not_echoed: no PLAN without held after START");
+    p->setNormalised(idx("hold"), 1.0f);
+    run(*p, 0.1);
+    v = drain(*p);
+    CHECK(holdEvents(v, 1) == 1 && holdEvents(v) == 1, "hold_not_echoed: the hand's Hold after START: %d EVENTs, not 1", holdEvents(v));
+    setPlaying(false);
+    tp::app::setHold(false);
+}
+
+// A FADE that reached its level does not outlive the project: a project load (the FM-1 from power-on) is at full level.
+void fade_reset_on_project_load()
+{
+    auto p = make();
+    setLink(*p, true);
+    run(*p, 1.0);
+    fade(*p, 0, 0);
+    run(*p, 0.2);
+    CHECK(p->linkGain() == 0.0f && silent(L, 128), "fade_load: FADE(0, 0) did not silence (the test proves nothing)");
+    const std::vector<uint8_t> state = p->internalSaveState();
+    CHECK(p->internalLoadState(state.data(), state.size()), "fade_load: the project did not load");
+    block(*p);
+    CHECK(p->linkGain() == 1.0f, "fade_load: gain %g after a project load, not 1", p->linkGain());
+    bool sound = false;
+    for (long done = 0; done < 4 * 44100 && !sound; done += 128)
+    {
+        block(*p);
+        sound = !silent(L, 128);
+    }
+    CHECK(sound, "fade_load: no sound within 4 s of the load");
+    // the same FADE a second time is a FADE again (the worker's word carries a count)
+    fade(*p, 64, 0);
+    block(*p);
+    CHECK(std::fabs(p->linkGain() - 64.0f / 127.0f) < 1e-6f, "fade_load: FADE(64, 0) gain %g", p->linkGain());
+    CHECK(p->internalLoadState(state.data(), state.size()), "fade_load: the project did not load (1)");
+    block(*p);
+    CHECK(p->linkGain() == 1.0f, "fade_load: gain %g after the second load", p->linkGain());
+    fade(*p, 64, 0);
+    block(*p);
+    CHECK(std::fabs(p->linkGain() - 64.0f / 127.0f) < 1e-6f, "fade_load: the same FADE again did nothing (gain %g)", p->linkGain());
+    fade(*p, 127, 0);
+    block(*p);
+    // a ramp under way goes with the load too
+    fade(*p, 0, 8);
+    run(*p, 1.0);
+    CHECK(p->linkGain() < 1.0f && p->linkGain() > 0.0f, "fade_load: no ramp under way (%g)", p->linkGain());
+    CHECK(p->internalLoadState(state.data(), state.size()), "fade_load: the project did not load (2)");
+    block(*p);
+    CHECK(p->linkGain() == 1.0f, "fade_load: a ramp goes on after a project load (%g)", p->linkGain());
+    run(*p, 0.5);
+    CHECK(p->linkGain() == 1.0f, "fade_load: the ramp came back after the load (%g)", p->linkGain());
+    drain(*p);
+}
+
 // SysEx delivered to the plugin: Harmony Link's own (an echo) and another maker's change nothing (the SDK hands the
 // plugin no SysEx at all; a 3-byte event with status F0 is not a note).
 void own_sysex_ignored()
@@ -780,6 +896,8 @@ int main()
     hold_command_sets_hold();
     start_releases_link_hold_only();
     link_off_ignores_commands();
+    hold_command_not_echoed();
+    fade_reset_on_project_load();
     own_sysex_ignored();
     std::printf(fails ? "FAILED (%d)\n" : "ALL PASSED\n", fails);
     return fails ? 1 : 0;
