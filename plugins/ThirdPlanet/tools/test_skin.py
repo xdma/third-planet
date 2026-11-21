@@ -210,7 +210,7 @@ class SkinTest(unittest.TestCase):
         self.assertEqual(len(names), len(set(names)))
 
     def test_no_one_shot_on_a_qlink(self):
-        """The one-shots (and the PLAY page's Next chord, 115, not d_next) stay off the knobs."""
+        """The one-shots (and the PLAY page's Next chord, not d_next) stay off the knobs."""
         play = self.tabs["PLAY"]["componentDefinition"]["componentsData"]
         nxt = next(c for c in play if c["componentData"]["name"] == "Next chord")
         self.assertEqual(nxt["handle remapping"]["map"][0]["value"], "Parameter %d" % self.controls["Next chord"])

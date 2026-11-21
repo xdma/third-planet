@@ -12,6 +12,7 @@
 #pragma once
 
 #include "app_api.h"
+#include "tp_features.h"
 
 extern "C" {
 #include "nachtfahrt/dsp/amb.h"
@@ -27,6 +28,7 @@ enum class Kind
     Piece,     // the piece (PRESET)
     Walk,      // the Chords page's walk character (ALGO there)
     Sync,      // Third Planet's own: follow the MPC's tempo and transport (MIDI clock to the FM-1)
+    Link,      // Third Planet's own: Harmony Link, lead Performer's harmony (TP_LINK; the parameter only then)
     KeyMode,   // Third Planet's own: what MIDI notes play (Pads: the three pad banks; Lead: the Lead)
     PadBase,   // Third Planet's own: the pad banks' first note
     Switch,    // a two-way switch for an FM-1 state (code: Sw*): tp::app's setter and its readout
@@ -73,6 +75,9 @@ constexpr ParamDef kParams[] = {
     // the piece, and Third Planet's own
     {"piece", "Piece", Kind::Piece, 0},
     {"sync", "Sync", Kind::Sync, 0},
+#if TP_LINK
+    {"link", "Link", Kind::Link, 0},
+#endif
     {"keymode", "Keys", Kind::KeyMode, 0},
     {"pad_base", "Pad base", Kind::PadBase, 0},
     {"lvl_atmos", "Atmosphere", Kind::Knob, P_CRACKLE},

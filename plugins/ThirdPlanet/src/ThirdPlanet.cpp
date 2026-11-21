@@ -16,6 +16,7 @@
 //                                     Next chord, New chords, Shake all, Reset, the nudges and shakes as
 //                                     one-shots (src/params.h)
 //   Sync                              the MPC's tempo and transport, sent to the FM-1 as MIDI clock
+//   Link                              Harmony Link (TP_LINK, src/tp_features.h): a switch only, so far
 //   display parameters                outputs only, after the controls: the status line (Pad, Chord, Hold, Lock)
 //                                     and the star-chart screen's (the arc, the ring, the slots, the particles,
 //                                     the planets, the log; src/sky.h), sent as they change, 24 a block at most
@@ -153,8 +154,8 @@ const char* const kNoteName[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#"
 
 bool isBool(tp::Kind k)
 {
-    return k == tp::Kind::Sync || k == tp::Kind::Switch || k == tp::Kind::Action || k == tp::Kind::Step ||
-           k == tp::Kind::Accent;
+    return k == tp::Kind::Sync || k == tp::Kind::Link || k == tp::Kind::Switch || k == tp::Kind::Action ||
+           k == tp::Kind::Step || k == tp::Kind::Accent;
 }
 
 // A value as the FM-1's screen shows it.
@@ -166,7 +167,8 @@ void label(const tp::ParamDef& d, int v, char* buf, size_t n)
         case tp::Kind::Master: std::snprintf(buf, n, "%d%%", v); return;
         case tp::Kind::Piece: std::snprintf(buf, n, "%s", en_piece_name(v)); return;
         case tp::Kind::Walk: std::snprintf(buf, n, "%s", EN_WALK_NAME[v % EN_NWALK]); return;
-        case tp::Kind::Sync: std::snprintf(buf, n, "%s", kOffOn[v ? 1 : 0]); return;
+        case tp::Kind::Sync:
+        case tp::Kind::Link: std::snprintf(buf, n, "%s", kOffOn[v ? 1 : 0]); return;
         case tp::Kind::KeyMode: std::snprintf(buf, n, "%s", kKeyModes[v ? 1 : 0]); return;
         case tp::Kind::PadBase: std::snprintf(buf, n, "%d", v); return;
         case tp::Kind::Switch:
@@ -220,7 +222,8 @@ int rangeHi(const tp::ParamDef& d)
         case tp::Kind::Master: return 200;
         case tp::Kind::Piece: return EN_NPIECES - 1;
         case tp::Kind::Walk: return EN_NWALK - 1;
-        case tp::Kind::Sync: return 1;
+        case tp::Kind::Sync:
+        case tp::Kind::Link: return 1;
         case tp::Kind::KeyMode: return 1;
         case tp::Kind::PadBase: return 128 - kPadSpan;
         case tp::Kind::ChordRoot: return 11;
@@ -263,7 +266,7 @@ mpc::Param makeParam(const tp::ParamDef& d)
     {
         mpc::Param p = mpc::boolParam(d.id, name, false);
         // (one-shots, and what belongs to the lane or slot on show, would replay wrongly as automation)
-        p.automatable = d.kind == tp::Kind::Sync || d.kind == tp::Kind::Switch;
+        p.automatable = d.kind == tp::Kind::Sync || d.kind == tp::Kind::Link || d.kind == tp::Kind::Switch;
         return p;
     }
     if (d.kind == tp::Kind::PadBase) return mpc::intParam(d.id, name, lo, hi, def, "");
@@ -393,6 +396,7 @@ public:
             addParam(makeParam(tp::kParams[i]));
             lo_[i] = rangeLo(tp::kParams[i]);
             if (tp::kParams[i].kind == tp::Kind::Sync) idxSync_ = i;
+            if (tp::kParams[i].kind == tp::Kind::Link) idxLink_ = i;
             if (tp::kParams[i].kind == tp::Kind::KeyMode) idxKeyMode_ = i;
             if (tp::kParams[i].kind == tp::Kind::PadBase) idxPadBase_ = i;
             appVal_[i].store(INT_MIN, std::memory_order_relaxed);
@@ -567,6 +571,7 @@ public:
 
     const tp::sky::Sky& sky() const { return sky_; }   // (tests: the screen's model, as the audio thread left it)
     bool logHot() const { return logHot_ > 0; }          // (tests: the newest log line is in the accent)
+    bool linkOn() const { return idxLink_ >= 0 && getBool(idxLink_); }   // (Harmony Link: off when compiled out)
 
 private:
     static mpc::PluginInfo makeInfo()
@@ -606,9 +611,9 @@ private:
             appVal_[i].store(INT_MIN, std::memory_order_relaxed);
             settle_[i] = 0;
             const tp::ParamDef& d = tp::kParams[i];
-            if (d.kind == tp::Kind::Master || d.kind == tp::Kind::Sync || d.kind == tp::Kind::KeyMode ||
-                d.kind == tp::Kind::PadBase)
-                continue;   // (Volume, Sync, Keys, Pad base: the plugin's own, kept as they are)
+            if (d.kind == tp::Kind::Master || d.kind == tp::Kind::Sync || d.kind == tp::Kind::Link ||
+                d.kind == tp::Kind::KeyMode || d.kind == tp::Kind::PadBase)
+                continue;   // (Volume, Sync, Link, Keys, Pad base: the plugin's own, kept as they are)
             // (the steps, accents and the root are the app's, saved in its project; the one-shots go back to Off and
             // never fire from a load: mirror() sends every one of them from the app. The switches are the FM-1's
             // state it never saves, so they come back from the MPC with the macros)
@@ -650,6 +655,7 @@ private:
                     }
                     syncWas_ = v != 0;
                     break;
+                case Kind::Link: break;   // (nothing yet: Harmony Link starts here in a later step)
                 case Kind::KeyMode:
                 case Kind::PadBase: releaseHeld(); break;   // (read where used; a pad held now meant something else)
                 case Kind::Switch:
@@ -1139,6 +1145,7 @@ private:
     std::atomic<uint32_t> logSeq_{0};
     std::atomic<uint32_t> logText_[kLogSlots][kLogWords];
     int idxSync_ = 0, idxKeyMode_ = 0, idxPadBase_ = 0;
+    int idxLink_ = -1;   // (-1: Link compiled out, TP_LINK=0)
 
     // the notes held, and what each one's press did
     uint8_t noteCount_[128] = {};

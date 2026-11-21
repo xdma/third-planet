@@ -8,6 +8,7 @@ status line across the top of every page and moves the 4 x 4 grid down to make r
 page's steps and accents under its four knobs, builds the LAYERS page (Mute, Solo, Nudge, Shake a layer),
 and builds SKY, the star-chart page (spec 8.1), as the first tab: SKY, PLAY, LAYERS, then ui.json's pages.
 SKY's art comes from gen_art.py and its geometry from layout.py; its Q-Links are MAIN's 16 controls.
+A control of a build switch's parameter (OPTIONAL: Link, TP_LINK) is an empty slot in a build without it.
 The status line is live text: `Label` widgets of type Value bound to the plugin's display parameters
 (src/ThirdPlanet.cpp, kDispPad on) and to Piece, with `Name` labels as captions. (A `Label` of
 type Text did not render on the MPC in Kolo's device check, so there is no fixed text.)
@@ -386,6 +387,29 @@ def sky_qlinks(c):
     return {"Tab": 1, "SubTab": 1, "Bank Direction": "RowTopDown", "Q-Links": m}
 
 
+# Parameters only some builds have (src/tp_features.h): in a build without one, its ui.json control is an empty
+# slot, so the skin is the one before it, byte for byte (tests/link_null.sh).
+OPTIONAL = {"Link"}
+
+
+def ui_for(plist, ui_path, tmpdir):
+    """ui.json, or a copy of it in tmpdir with the controls of OPTIONAL parameters this build lacks emptied."""
+    have = {q["name"] for q in plist}
+    ui = json.load(open(ui_path))
+    changed = False
+    for pg in ui["pages"]:
+        for k, ctl in enumerate(pg["controls"]):
+            if isinstance(ctl, dict) and ctl.get("param") in OPTIONAL and ctl["param"] not in have:
+                pg["controls"][k] = "empty"
+                changed = True
+    if not changed:
+        return ui_path
+    path = os.path.join(tmpdir, "ui.json")
+    with open(path, "w") as f:
+        json.dump(ui, f, indent=2)
+    return path
+
+
 def main():
     if not os.path.isfile(PARAMS):
         sys.exit("gen_skin: build the plugin first (no %s)" % PARAMS)
@@ -400,8 +424,9 @@ def main():
         if pname not in index_of:
             sys.exit("gen_skin: no control named %r in params.json" % pname)
 
-    with tempfile.TemporaryDirectory() as tmp:
-        subprocess.run([sys.executable, GEN_UI, "--params", PARAMS, "--ui", os.path.join(PLUGIN, "ui.json"),
+    with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as uitmp:
+        ui_path = ui_for(plist, os.path.join(PLUGIN, "ui.json"), uitmp)
+        subprocess.run([sys.executable, GEN_UI, "--params", PARAMS, "--ui", ui_path,
                         "--out", tmp, "--kit-cache", os.path.join(PLUGIN, "build"), "--quiet"], check=True)
         tui = json.load(open(os.path.join(tmp, "TUI.json")))
         for tab in tui["pageData"]["tabs"]:

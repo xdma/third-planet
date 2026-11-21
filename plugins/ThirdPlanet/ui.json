@@ -15,7 +15,7 @@
         { "param": "Keys", "widget": "switch" },
         { "param": "Pad base", "widget": "knob" },
         { "param": "Sync", "widget": "switch" },
-        "empty"
+        { "param": "Link", "widget": "switch" }
       ]
     },
     {
