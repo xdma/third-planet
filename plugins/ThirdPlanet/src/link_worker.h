@@ -4,11 +4,13 @@
 //
 // While the link is on it:
 //   - opens the sequencer client "Third Planet" with the port "Harmony Link" (readable by its owner only: nothing can
-//     subscribe to it, so nothing echoes) and a port to listen on, and connects both to the USB MIDI function
+//     subscribe to it, so nothing echoes) and a port to listen on (writable by its owner's connection only, so the
+//     MPC does not offer it as a MIDI output), and connects both to the USB MIDI function
 //     ("f_midi" port 0, the computer's "MPC Live III Port 1"). No f_midi: it looks again every 2 s;
 //   - every 2 ms takes what the ring has: Events go out at once, in order; of the Plans only the newest, at most 20 a
-//     second; with nothing new the last Plan goes out again every 2 s (the heartbeat), while the audio thread runs
-//     (tick(): no block for 500 ms, no heartbeat);
+//     second, and at most 2 a second while only the layers' activity, densityShift and pos16 change (anything else,
+//     and a Plan after an Event, goes at once); with nothing new the last Plan goes out again every 2 s (the
+//     heartbeat), while the audio thread runs (tick(): no block for 500 ms, no heartbeat);
 //   - a send error, or f_midi gone or changed (looked up every 2 s), ends the client; a new one is made and
 //     connected, no sooner than 2 s after the last connection; then the newest Plan goes out first;
 //   - reads the computer's commands (FADE, HOLD), which may come in pieces, into the atomics below;
@@ -85,6 +87,7 @@ public:
     enum State : uint32_t { Off, NoAlsa, Searching, Connected };
     std::atomic<uint32_t> state{Off};
     std::atomic<uint32_t> sentCount{0}, sendErrors{0}, takenCount{0};   // messages sent, failed sends, ring items taken
+    std::atomic<uint32_t> eventsDropped{0};   // Events the sequencer did not take (busy, or the send failed): lost
     bool running() const { return thread_.joinable(); }   // (false also when the system gave no thread: start())
     bool failStart = false;   // (tests: start() as if the system had no thread to give)
 
@@ -95,8 +98,9 @@ public:
 
     // kPollMs: the poll while the link is on with libasound (connected or searching); kNoAlsaMs: with none, only the
     // ring's drain; kIdleMs: Link Off (quit_ is looked at every pass, so stop() joins within about this).
-    static constexpr int kPollMs = 2, kNoAlsaMs = 20, kIdleMs = 100, kPlanMinMs = 50, kHeartbeatMs = 2000,
-                         kRetryMs = 2000, kStaleMs = 500;
+    // kPlanMinMs: between two Plans; kLayerMinMs: ... when the newer differs only in the layers and pos16.
+    static constexpr int kPollMs = 2, kNoAlsaMs = 20, kIdleMs = 100, kPlanMinMs = 50, kLayerMinMs = 500,
+                         kHeartbeatMs = 2000, kRetryMs = 2000, kStaleMs = 500;
 
 private:
     enum class Sent { Ok, Busy, Failed };
@@ -130,6 +134,9 @@ private:
     double blocksAt_ = -1e18;
     PlanState plan_{};         // the newest Plan taken since the link opened
     bool havePlan_ = false, planDue_ = false;
+    PlanState sent_{};         // the Plan last sent on this connection (haveSent_), to tell what changed since
+    bool haveSent_ = false;
+    bool eventSince_ = false;  // an Event was taken since the last Plan sent
     uint8_t seq_ = 0;          // the running 7-bit counter of the messages
     uint8_t in_[kMaxMsg];      // a command being put together, F0 to F7
     int inLen_ = 0;

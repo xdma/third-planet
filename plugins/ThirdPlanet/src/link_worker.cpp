@@ -10,6 +10,10 @@
 #include <cstring>
 #include <system_error>
 
+#if defined(__APPLE__) || defined(__linux__)
+#include <pthread.h>
+#endif
+
 namespace tp::link {
 
 namespace {
@@ -28,6 +32,28 @@ constexpr char kTarget[] = "f_midi";   // the USB MIDI function; its port 0 is t
 constexpr int kTargetPort = 0;
 constexpr int kMaxTake = 4 * 128;      // ring items a poll takes at most (the audio thread cannot hold the worker)
 constexpr int kMaxInput = 256;         // input events a poll reads at most
+
+// The thread's name, for whoever looks at the process (top -H, a debugger, a crash report). 15 characters at most.
+void nameThread()
+{
+#if defined(__APPLE__)
+    pthread_setname_np("tp-harmony-link");
+#elif defined(__linux__)
+    pthread_setname_np(pthread_self(), "tp-harmony-link");
+#endif
+}
+
+// The two Plans differ, if at all, only in what the layers do and in the host's position within the bar: activity,
+// densityShift and pos16 (which move all the time while the piece plays). Anything else is the harmony, the form,
+// the transport, the key, the slots, Hold, Lock or the mutes.
+bool sameButLayers(const PlanState& a, const PlanState& b)
+{
+    PlanState x = a;
+    std::memcpy(x.activity, b.activity, sizeof x.activity);
+    x.densityShift = b.densityShift;
+    x.pos16 = b.pos16;
+    return x == b;
+}
 
 } // namespace
 
@@ -66,6 +92,7 @@ void Worker::stop()
 
 void Worker::run()
 {
+    nameThread();
     while (!quit_.load(std::memory_order_acquire))
     {
         if (!enabled_.load(std::memory_order_acquire))
@@ -93,7 +120,7 @@ void Worker::openLink()
     }
     Item it;
     for (int n = 0; n < kMaxTake && ring_.pop(it); ++n) {}
-    havePlan_ = planDue_ = false;
+    havePlan_ = planDue_ = haveSent_ = eventSince_ = false;
     inOn_ = false;
     nextTry_ = clock_.nowMs();
     connectedAt_ = planAt_ = -1e18;
@@ -111,7 +138,7 @@ void Worker::closeLink()
     if (target_ >= 0)
     {
         uint8_t msg[kMaxMsg];
-        send(msg, encodeBye(nextSeq(), msg), now);
+        if (send(msg, encodeBye(seq_, msg), now) == Sent::Ok) nextSeq();
     }
     closeSeq(now);
     open_ = false;
@@ -152,19 +179,38 @@ void Worker::poll()
             havePlan_ = planDue_ = true;
         }
         else if (target_ >= 0)   // (an Event with no one to hear it is dropped: it is news, not state)
-            send(msg, encodeEvent(it.ev, nextSeq(), msg), now);
+        {
+            // An Event is sent once, in its turn: if the sequencer cannot take it now (-EAGAIN: its buffer is full)
+            // or the send fails, it is lost, and counted. It keeps its seq, so the receiver sees the gap.
+            if (send(msg, encodeEvent(it.ev, nextSeq(), msg), now) != Sent::Ok)
+                eventsDropped.store(eventsDropped.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
+            eventSince_ = true;   // (the Plan that follows shows what the hand did: at once)
+        }
     }
     if (taken) takenCount.store(takenCount.load(std::memory_order_relaxed) + taken, std::memory_order_relaxed);
 
-    if (target_ >= 0 && havePlan_ &&
-        ((planDue_ && now - planAt_ >= kPlanMinMs) || (now - planAt_ >= kHeartbeatMs && now - blocksAt_ < kStaleMs)))
+    // The newest Plan goes out when it is due: 20 a second at most (kPlanMinMs); and if it differs from the last
+    // one sent only in what the layers do (sameButLayers), 2 a second at most (kLayerMinMs): those change in nearly
+    // every block while the piece plays, and 20 Plans a second on top of the MPC's own MIDI overran the USB MIDI
+    // function now and then (a PLAN cut short at the computer). The first Plan of a connection, a Plan after an
+    // Event and any other change go at once. With nothing due, the heartbeat.
+    if (target_ >= 0 && havePlan_)
     {
-        if (send(msg, encodePlan(plan_, nextSeq(), msg), now) == Sent::Ok)
+        const double since = now - planAt_;
+        const bool major = !haveSent_ || eventSince_ || !sameButLayers(plan_, sent_);
+        if ((planDue_ && since >= (major ? kPlanMinMs : kLayerMinMs)) ||
+            (since >= kHeartbeatMs && now - blocksAt_ < kStaleMs))
         {
-            planDue_ = false;
-            planAt_ = now;
+            if (send(msg, encodePlan(plan_, seq_, msg), now) == Sent::Ok)   // (a seq is used by what was sent)
+            {
+                nextSeq();
+                planDue_ = eventSince_ = false;
+                planAt_ = now;
+                sent_ = plan_;
+                haveSent_ = true;
+            }
+            // (busy: again on the next poll; failed: after the reconnect)
         }
-        // (busy: again on the next poll; failed: after the reconnect)
     }
     if (target_ >= 0) readInput();
 }
@@ -182,9 +228,10 @@ void Worker::connect(double now)
         const bool nonblocking = api_.nonblock(h_, 1) >= 0;   // (or reading would hold the thread, and the join)
         const unsigned type = kSeqTypeMidiGeneric | kSeqTypeApplication;
         // READ without SUBS_READ: only this client can connect the port, so the MPC cannot subscribe to it and
-        // nothing comes back into the plugin's own track.
+        // nothing comes back into the plugin's own track. WRITE without SUBS_WRITE, the same way: this client's own
+        // connection from f_midi needs no more, and the MPC does not list the port among its MIDI outputs.
         outPort_ = api_.createPort(h_, "Harmony Link", kSeqCapRead, type);
-        inPort_ = api_.createPort(h_, "Harmony Link In", kSeqCapWrite | kSeqCapSubsWrite, type);
+        inPort_ = api_.createPort(h_, "Harmony Link In", kSeqCapWrite, type);
         if (!nonblocking || outPort_ < 0 || inPort_ < 0)
         {
             closeSeq(now);
@@ -204,6 +251,7 @@ void Worker::connect(double now)
     nextCheck_ = now + kRetryMs;
     planAt_ = -1e18;        // the newest Plan first, at once
     planDue_ = havePlan_;
+    haveSent_ = false;
     inOn_ = false;
     state.store(Connected, std::memory_order_relaxed);
 }
@@ -220,6 +268,7 @@ void Worker::closeSeq(double now)
         const double soonest = connectedAt_ + kRetryMs;
         nextTry_ = soonest > now ? soonest : now;
         planDue_ = havePlan_;
+        haveSent_ = false;   // (whoever connects next has seen none of it)
     }
     target_ = -1;
     if (open_ && api_.ok) state.store(Searching, std::memory_order_relaxed);

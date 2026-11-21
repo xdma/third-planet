@@ -306,6 +306,101 @@ void coalesces_to_20_per_s()
         CHECK(s2[i][6] == ((s2[i - 1][6] + 1) & 0x7F), "coalesces_to_20_per_s: seq %d after %d", s2[i][6], s2[i - 1][6]);
 }
 
+// Plans that differ from the last one SENT only in what the layers do (activity, densityShift) and in pos16 go out
+// twice a second at most, the newest each time; any other change goes at once (20 a second at most), and so does the
+// Plan that follows an Event.
+PlanState layersOf(PlanState p, int n)
+{
+    p.activity[0] = (uint8_t)(n % 128), p.activity[3] = (uint8_t)((n * 7) % 128);
+    p.densityShift = (int8_t)(n % 9 - 4);
+    p.pos16 = (uint8_t)(n % 16);
+    return p;
+}
+void layer_plans_2_per_s()
+{
+    Rig r;
+    r.start();
+    const PlanState base = planOf(5);
+    r.plan(base);
+    r.clock.step();
+    CHECK(sent().size() == 1, "layer_plans: the first Plan was not sent at once");
+    for (int i = 1; i <= 200; ++i)   // the layers move every 10 ms, over 2 s
+    {
+        r.plan(layersOf(base, i));
+        r.clock.step(5);
+    }
+    int n = countType(sent(), kPlan) - 1;
+    CHECK(n >= 3 && n <= 4, "layer_plans: %d PLANs in 2 s of layer changes only, not 4 (2 a second)", n);
+    r.clock.ms(520);
+    auto s = sent();
+    CHECK(isPlan(s.back(), layersOf(base, 200)), "layer_plans: the last layer state was not sent within 500 ms");
+    n = (int)s.size();
+    r.clock.ms(1000);
+    CHECK((int)sent().size() == n, "layer_plans: %d more PLANs with nothing pushed", (int)sent().size() - n);
+    // a change in the harmony goes at once, in the same poll, whatever the layers did just before
+    r.plan(layersOf(base, 201));   // (more than 500 ms after the last PLAN: at once)
+    r.clock.step();
+    CHECK((int)sent().size() == n + 1, "layer_plans: a layer change long after the last PLAN was not sent at once");
+    n = (int)sent().size();
+    r.clock.ms(100);
+    r.plan(layersOf(base, 203));
+    r.clock.ms(100);
+    CHECK((int)sent().size() == n, "layer_plans: a layer change 100 ms after the last PLAN was sent at once");
+    PlanState chord = layersOf(base, 202);
+    chord.now.root = 9, chord.now.mask = 0x211;
+    r.plan(chord);
+    r.clock.step();
+    s = sent();
+    CHECK((int)s.size() == n + 1 && isPlan(s.back(), chord), "layer_plans: a chord change was not sent at once");
+    // each of these is a change that goes at once: every field but the layers' and pos16
+    PlanState q = chord;
+    const auto atOnce = [&](const char* what) {
+        r.clock.ms(60);   // (past the 20 a second)
+        const int was = (int)sent().size();
+        r.plan(q);
+        r.clock.step();
+        const auto v = sent();
+        CHECK((int)v.size() == was + 1 && isPlan(v.back(), q), "layer_plans: a change of %s was not sent at once", what);
+    };
+    q.playing = !q.playing, atOnce("playing");
+    q.held = !q.held, atOnce("held");
+    q.locked = !q.locked, atOnce("locked");
+    q.loopMode = !q.loopMode, atOnce("loopMode");
+    q.timed = !q.timed, atOnce("timed");
+    q.piece ^= 1, atOnce("piece");
+    q.keyRoot ^= 1, atOnce("keyRoot");
+    q.keyMode ^= 1, atOnce("keyMode");
+    q.next.root = 2, atOnce("the next chord");
+    q.barsToNext = 3, atOnce("barsToNext");
+    q.barsToChange = 2, atOnce("barsToChange");
+    q.progPos = 4, atOnce("progPos");
+    q.progCount = 6, atOnce("progCount");
+    q.walk = 2, atOnce("walk");
+    q.slotState[3] = 2, atOnce("a slot's state");
+    q.slot[3].name[0] = 'F', atOnce("a slot's chord");
+    q.section = 2, atOnce("section");
+    q.phraseBar ^= 1, atOnce("phraseBar");
+    q.evolveChance ^= 1, atOnce("evolveChance");
+    q.heardMask ^= 4, atOnce("heardMask (a mute)");
+    // a layer change that comes with an Event (the hand did something): the Event, then the Plan, at once
+    r.clock.ms(60);
+    n = (int)sent().size();
+    r.event(7);
+    q = layersOf(q, 300);
+    r.plan(q);
+    r.clock.step();
+    s = sent();
+    CHECK((int)s.size() == n + 2 && typeOf(s[n]) == kEvent && isPlan(s.back(), q), "layer_plans: the Plan after an Event was held back");
+    // ... and the layers alone after it: twice a second again
+    for (int i = 301; i <= 400; ++i)
+    {
+        r.plan(layersOf(q, i));
+        r.clock.step(5);
+    }
+    n = countType(sent(), kPlan) - countType(s, kPlan);
+    CHECK(n >= 1 && n <= 2, "layer_plans: %d PLANs in 1 s of layer changes only, not 2", n);
+}
+
 void heartbeat_every_2s()
 {
     Rig r;
@@ -354,6 +449,40 @@ void events_in_order()
     CHECK(s2.size() == 7 && typeOf(s2[5]) == kEvent && isPlan(s2[6], planOf(9)), "events_in_order: the Plan did not follow its Event");
 }
 
+// The sequencer cannot take a message now (-EAGAIN): an Event is lost, counted, and its seq with it (the receiver
+// sees the gap); a Plan waits for the next poll and uses no seq until it is sent.
+void busy_send_counts_lost_events()
+{
+    Rig r;
+    r.start();
+    r.plan(planOf(1));
+    r.clock.step();
+    CHECK(sent().size() == 1 && r.w->eventsDropped.load() == 0, "busy: the first Plan");
+    const int seq0 = sent()[0][6];
+    locked([] { fake.sendErr = -11; return 0; });
+    for (int i = 0; i < 3; ++i)
+        r.event(50 + i);
+    r.clock.step();
+    auto s = sent();
+    CHECK(s.size() == 3, "busy: %d messages after 3 Events with the first refused, not 3", (int)s.size());
+    CHECK(r.w->eventsDropped.load() == 1, "busy: %u Events counted as lost, not 1", r.w->eventsDropped.load());
+    CHECK(r.w->sendErrors.load() == 0 && locked([] { return fake.closes; }) == 0, "busy: -EAGAIN taken for an error");
+    if (s.size() == 3)
+        CHECK(s[1][6] == ((seq0 + 2) & 0x7F) && s[2][6] == ((seq0 + 3) & 0x7F),
+              "busy: seq %d, %d after %d: the lost Event's seq is not left out", s[1][6], s[2][6], seq0);
+    // a Plan refused: again on the next poll, with the next seq (none used by the try)
+    r.clock.ms(60);
+    locked([] { fake.sendErr = -11; return 0; });
+    r.plan(planOf(2));
+    r.clock.step();
+    CHECK(sent().size() == 3, "busy: a refused Plan counted as sent");
+    r.clock.step();
+    s = sent();
+    CHECK(s.size() == 4 && isPlan(s.back(), planOf(2)), "busy: the refused Plan was not sent on the next poll");
+    if (s.size() == 4) CHECK(s[3][6] == ((seq0 + 4) & 0x7F), "busy: the Plan's seq %d, not %d", s[3][6], (seq0 + 4) & 0x7F);
+    CHECK(r.w->eventsDropped.load() == 1, "busy: a refused Plan counted as a lost Event");
+}
+
 void bye_on_stop()
 {
     Rig r;
@@ -379,7 +508,11 @@ void port_caps()
         CHECK(ports[0].name == "Harmony Link", "port_caps: the out port is \"%s\"", ports[0].name.c_str());
         CHECK(ports[0].caps == 1u, "port_caps: the out port's caps are %#x, not READ only", ports[0].caps);
         CHECK(!(ports[0].caps & (1u << 5)), "port_caps: the out port can be subscribed to (echo)");
-        CHECK(ports[1].caps == ((1u << 1) | (1u << 6)), "port_caps: the in port's caps are %#x", ports[1].caps);
+        // WRITE without SUBS_WRITE: the owner's own connection needs no more, and the MPC cannot list the port among
+        // its MIDI outputs (nothing else can connect to it)
+        CHECK(ports[1].name == "Harmony Link In", "port_caps: the in port is \"%s\"", ports[1].name.c_str());
+        CHECK(ports[1].caps == (1u << 1), "port_caps: the in port's caps are %#x, not WRITE only", ports[1].caps);
+        CHECK(!(ports[1].caps & (1u << 6)), "port_caps: the in port can be subscribed to (the MPC lists it as an output)");
     }
     const auto to = locked([] { return fake.to; });
     const auto from = locked([] { return fake.from; });
@@ -844,9 +977,11 @@ int main()
 {
     sends_plan_within_poll();
     coalesces_to_20_per_s();
+    layer_plans_2_per_s();
     heartbeat_every_2s();
     no_heartbeat_before_a_plan();
     events_in_order();
+    busy_send_counts_lost_events();
     bye_on_stop();
     port_caps();
     worker_reconnects_after_target_loss();
