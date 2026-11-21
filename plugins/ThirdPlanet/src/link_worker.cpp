@@ -160,13 +160,13 @@ void Worker::connect(double now)
         if (api_.open(&h, "default", kSeqOpenDuplex, 0) < 0 || !h) return;
         h_ = h;
         api_.setName(h_, "Third Planet");
-        api_.nonblock(h_, 1);
+        const bool nonblocking = api_.nonblock(h_, 1) >= 0;   // (or reading would hold the thread, and the join)
         const unsigned type = kSeqTypeMidiGeneric | kSeqTypeApplication;
         // READ without SUBS_READ: only this client can connect the port, so the MPC cannot subscribe to it and
         // nothing comes back into the plugin's own track.
         outPort_ = api_.createPort(h_, "Harmony Link", kSeqCapRead, type);
         inPort_ = api_.createPort(h_, "Harmony Link In", kSeqCapWrite | kSeqCapSubsWrite, type);
-        if (outPort_ < 0 || inPort_ < 0)
+        if (!nonblocking || outPort_ < 0 || inPort_ < 0)
         {
             closeSeq(now);
             return;

@@ -9,7 +9,8 @@
 //     back; a send error, or the function gone without one, means a new client and a new connection;
 //   - FADE and HOLD arrive in pieces and reach the atomics the audio thread reads; anything else is ignored;
 //   - items left in the ring from before are not sent, and a fresh Plan is asked for;
-//   - 200 starts and stops: no hang, every open closed; with no libasound the ring is still drained.
+//   - 200 starts and stops, and 400 flips of Link on a running worker, the audio thread pushing all the while: no
+//     hang, every open closed, a PLAN after the last On; with no libasound the ring is still drained.
 // TP_LINK=1 only. Built alone, under ASan and UBSan (tests/all.sh), and under TSan by hand:
 //   c++ -std=c++17 -O1 -g -fsanitize=address,undefined -DTP_LINK=1 -I plugins/ThirdPlanet/src \
 //       plugins/ThirdPlanet/tests/test_link_worker.cpp plugins/ThirdPlanet/src/link_worker.cpp \
@@ -626,6 +627,73 @@ void worker_toggle_stress()
     std::printf("worker_toggle_stress: %d opens, %d messages, %.2f s\n", opens, (int)s.size(), secs);
 }
 
+// Link On and Off as the plugin does it: the flag flipped on a running worker, the audio thread pushing all the while
+void enable_toggle_stress()
+{
+    using clk = std::chrono::steady_clock;
+    const auto t0 = clk::now();
+    fake.reset();
+    LinkRing ring;
+    FreeClock clock;
+    Worker w(ring, fakeApi(), clock);
+    std::atomic<bool> quit{false};
+    std::thread audio([&] {
+        int n = 0;
+        while (!quit.load())
+        {
+            Item it{};
+            it.kind = (n & 3) ? Item::Event : Item::Plan;
+            it.plan = planOf(n);
+            it.ev = LinkEvent{0, 3, -1, 0, 0, (int16_t)(n & 0x3FF)};
+            ring.push(it);
+            if (w.takeWantPlan()) { it.kind = Item::Plan; ring.push(it); }
+            if ((++n & 31) == 0) std::this_thread::sleep_for(std::chrono::microseconds(50));   // (a block's worth, then the next)
+        }
+    });
+    w.start();
+    std::thread hand([&] {
+        for (int i = 0; i < 400; ++i)
+        {
+            w.setEnabled(i & 1);
+            if (i % 3 == 0) std::this_thread::yield();
+            if (i % 3 == 1) std::this_thread::sleep_for(std::chrono::microseconds(100 + 37 * (i % 7)));
+        }
+        w.setEnabled(true);
+    });
+    hand.join();
+    // on at the end: the link opens and a PLAN goes out
+    const int opens0 = locked([] { return fake.opens; });
+    for (int i = 0; i < 4000 && w.state.load() != Worker::Connected; ++i)
+        std::this_thread::sleep_for(std::chrono::microseconds(500));
+    size_t seen = locked([] { return fake.sent.size(); });
+    bool plan = false;
+    for (int i = 0; i < 4000 && !plan; ++i)
+    {
+        std::this_thread::sleep_for(std::chrono::microseconds(500));
+        locked([&] {
+            for (; seen < fake.sent.size() && !plan; ++seen)
+                plan = typeOf(fake.sent[seen]) == kPlan;
+            return 0;
+        });
+    }
+    CHECK(w.state.load() == Worker::Connected, "enable_toggle_stress: not connected after the last On");
+    CHECK(plan, "enable_toggle_stress: no PLAN after the last On");
+    quit.store(true);
+    audio.join();
+    w.stop();
+    const double secs = std::chrono::duration<double>(clk::now() - t0).count();
+    CHECK(secs < 5.0, "enable_toggle_stress: %.1f s", secs);
+    const int opens = locked([] { return fake.opens; }), closes = locked([] { return fake.closes; });
+    CHECK(opens == closes, "enable_toggle_stress: %d opens, %d closes", opens, closes);
+    CHECK(opens >= 2 && opens >= opens0, "enable_toggle_stress: opened %d times in 400 flips", opens);
+    CHECK(locked([] { return fake.sendsWhileClosed; }) == 0, "enable_toggle_stress: sends after a close");
+    const auto s = sent();
+    CHECK(!s.empty() && typeOf(s.back()) == kBye, "enable_toggle_stress: the last message is not a BYE");
+    for (const Bytes& m : s)
+        if (typeOf(m) < 0 || m.back() != 0xF7) { CHECK(false, "enable_toggle_stress: a message is not Harmony Link's"); break; }
+    std::printf("enable_toggle_stress: %d opens, %d messages, %.2f s\n", opens, (int)s.size(), secs);
+}
+
 void no_alsa_degrades()
 {
     Rig r(false);
@@ -676,6 +744,7 @@ int main()
     drops_stale_items_on_open();
     enable_flag();
     worker_toggle_stress();
+    enable_toggle_stress();
     no_alsa_degrades();
     load_alsa();
     if (fails) { std::printf("%d FAILED\n", fails); return 1; }

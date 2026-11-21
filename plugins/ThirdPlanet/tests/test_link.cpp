@@ -484,12 +484,16 @@ void worker_takes_the_ring()
     setLink(*p, true);
     CHECK(until(*p, [&] { return w.takenCount.load() >= 1; }), "worker: Link On, and the worker took no Plan");
     CHECK(w.state.load() != Worker::Off, "worker: Link On, and the link is not open");
-    Item it{};
-    CHECK(until(*p, [&] { return !p->linkRing_.pop(it); }), "worker: the ring is not drained");
-    const uint32_t taken = w.takenCount.load();
+    // (the ring is never popped here: the worker is its one consumer)
     setLink(*p, false);
     CHECK(until(*p, [&] { return w.state.load() == Worker::Off; }), "worker: Link Off, and the link is still open");
-    CHECK(w.takenCount.load() == taken, "worker: items taken with Link Off");
+    const uint32_t taken = w.takenCount.load();
+    for (int i = 0; i < 20; ++i)   // (100 ms: five of the idle thread's sleeps)
+    {
+        block(*p);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(w.takenCount.load() == taken && w.state.load() == Worker::Off, "worker: at work with Link Off again");
     setLink(*p, true);   // (on again: a Plan again, although nothing changed)
     CHECK(until(*p, [&] { return w.takenCount.load() > taken; }), "worker: Link On again, and no Plan");
     CHECK(p->linkRing_.dropped() == 0, "worker: Events dropped");
