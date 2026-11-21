@@ -13,7 +13,7 @@
 // The script, about 90 s at 44100 Hz at random block sizes 1..512 (fixed-seed LCG):
 //   - pads on channels 1 and 16, notes on all 16 channels (stacks of 3-4 on channel 16, notes on channel 15);
 //   - CCs 0..127 with random values on all channels, except 120 and 123 (only at set times, on all 16 channels:
-//     Performer's panic) and 102/103 on channel 16 (only the set near-miss handshakes below);
+//     a sequencer's panic) and 102/103 on channel 16 (only the set near-miss handshakes below);
 //   - near-miss handshakes on channel 16, and one exact handshake on channel 15; the key CCs 104..106 on 16;
 //   - program changes, pitch bend and channel pressure now and then;
 //   - every base parameter written once by the host (display values too), then Volume, Piece, Hold, Mute Seq,
@@ -136,7 +136,7 @@ void buildMidi()
     shake(77.0, 0.0, h, 80, 84, true, false);    // the letters the wrong way round...
     cc(sec(77.02), h, 103, 84);                  // ...('P' as 102, 'T' as 103)
 
-    // Performer's panic: CC 123 then 120 on all 16 channels, at set times
+    // a sequencer's panic: CC 123 then 120 on all 16 channels, at set times
     for (double t : {14.0, 44.5, 71.0, 86.0})
         for (int ch = 0; ch < 16; ++ch) cc(sec(t), ch, 123, 0), cc(sec(t), ch, 120, 0);
 

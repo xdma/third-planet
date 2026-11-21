@@ -28,7 +28,7 @@ enum class Kind
     Piece,     // the piece (PRESET)
     Walk,      // the Chords page's walk character (ALGO there)
     Sync,      // Third Planet's own: follow the MPC's tempo and transport (MIDI clock to the FM-1)
-    Link,      // Third Planet's own: Harmony Link, lead Performer's harmony (TP_LINK; the parameter only then)
+    Link,      // Third Planet's own: Harmony Link, lead the link receiver's harmony (TP_LINK; the parameter only then)
     KeyMode,   // Third Planet's own: what MIDI notes play (Pads: the three pad banks; Lead: the Lead)
     PadBase,   // Third Planet's own: the pad banks' first note
     Switch,    // a two-way switch for an FM-1 state (code: Sw*): tp::app's setter and its readout
