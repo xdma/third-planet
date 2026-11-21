@@ -17,6 +17,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "ThirdPlanet.cpp"
@@ -248,7 +249,7 @@ void capture_reads_readouts()
     CHECK(s.pos16 == 10, "pos16 %d, not 10", s.pos16);
     CHECK(s.playing == playing() && s.held == held() && s.locked == locked() && s.loopMode == loopMode() &&
           s.timed == external(), "capture: the flags");
-    CHECK(s.piece == piece() && s.keyRoot == par(P_ROOT) && s.keyMode == par(P_MODE), "capture: piece or key");
+    CHECK(s.piece == piece() && s.keyRoot == par(P_ROOT) % 12 && s.keyMode == par(P_MODE), "capture: piece or key");
     char name[kChordTextMax];
     chordText(chordCode(), name);
     CHECK(s.now.mask == tp::link::chordMask(chordCode()) && std::strncmp(s.now.name, name, 8) == 0 && s.now.root < 12,
@@ -271,7 +272,20 @@ void capture_reads_readouts()
         CHECK(s.activity[l] <= 127 && std::abs(s.activity[l] - layerActivity(l) * 127.0f) <= 0.5f, "capture: activity %d", l);
     }
     CHECK(s.heardMask >> 5 == 0, "capture: heardMask's high bits");
-    CHECK(s == tp::link::capture(t), "capture twice: not equal");
+    // a slot written on the Chords page as C major, triad: its root, mask and name in the Plan
+    knob(kKnobSlot, 3);
+    setChordRoot(0);
+    knob(kKnobChord, EN_CQ_MAJOR);
+    knob(kKnobType, EN_CX_TRIAD);
+    run(*p, 0.1);
+    const PlanState w = tp::link::capture(t);
+    const int code3 = slotChordCode(3);
+    chordText(code3, name);
+    CHECK(slotState(3) == kSlotWritten && w.slotState[3] == kSlotWritten, "capture: slot 3 not written (%d)", (int)slotState(3));
+    CHECK(code3 == kChordLabelBase + (0 * EN_NCQ + EN_CQ_MAJOR) * EN_NCX + EN_CX_TRIAD, "capture: slot 3 is code %d, not C major", code3);
+    CHECK(w.slot[3].root == 0 && w.slot[3].mask == 0b000010010001 && std::strncmp(w.slot[3].name, name, 8) == 0 && name[0] == 'C',
+          "capture: written slot 3: root %d mask %03x name %.8s (%s)", w.slot[3].root, w.slot[3].mask, w.slot[3].name, name);
+    CHECK(w == tp::link::capture(t), "capture twice: not equal");
     // pos16 at the edges, and with no position
     t.ppqPos = 11.99;
     CHECK(tp::link::capture(t).pos16 == 15, "pos16 at the bar's end");
@@ -351,6 +365,65 @@ void ring_overflow_keeps_latest_plan()
     CHECK(r.dropped() > 0, "overflow: dropped() is 0");
 }
 
+// The producer and the consumer on two threads (run it once under -fsanitize=thread too): Events strictly in order,
+// none lost but those counted in dropped(), every Plan whole (all its fields one counter), the last Plan the last
+// pushed. Once with Events and Plans, once with Plans only (so the Events' indices cannot order the Plans).
+void ring_two_threads(bool events)
+{
+    tp::link::Ring<16> r;   // (small: the queue fills and drops)
+    constexpr int kPushes = 200000;
+    std::atomic<bool> done{false};
+    int popped = 0, plans = 0, torn = 0, disorder = 0, lastEv = -1, lastPlan = -1;
+    std::thread consumer([&] {
+        Item it{};
+        for (;;)
+        {
+            const bool fin = done.load(std::memory_order_acquire);
+            bool any = false;
+            while (r.pop(it))
+            {
+                any = true;
+                if (it.kind == Item::Event)
+                {
+                    const int v = (uint16_t)it.ev.param | (uint16_t)it.ev.from << 16;
+                    disorder += v <= lastEv;
+                    lastEv = v, ++popped;
+                }
+                else
+                {
+                    const int v = it.plan.section | it.plan.phraseBar << 8 | it.plan.piece << 16;
+                    torn += it.plan.slot[7].mask != (uint16_t)(v & 0xFFFF) || it.plan.activity[4] != it.plan.section ||
+                            it.plan.pos16 != (it.plan.phraseBar & 15);
+                    disorder += v < lastPlan;
+                    lastPlan = v, ++plans;
+                }
+            }
+            if (fin && !any) break;
+        }
+    });
+    for (int i = 0; i < kPushes; ++i)
+    {
+        Item e{};
+        e.kind = Item::Event, e.ev.param = (int16_t)(i & 0xFFFF), e.ev.from = (int16_t)(i >> 16);
+        if (events) r.push(e);
+        if (i % 7 == 0)
+        {
+            Item pl{};
+            const int v = i;   // (24 bits: section, phraseBar, piece; increasing)
+            pl.kind = Item::Plan, pl.plan.section = (uint8_t)(v & 0xFF), pl.plan.phraseBar = (uint8_t)(v >> 8 & 0xFF);
+            pl.plan.piece = (uint8_t)(v >> 16), pl.plan.slot[7].mask = (uint16_t)(v & 0xFFFF);
+            pl.plan.activity[4] = pl.plan.section, pl.plan.pos16 = (uint8_t)(pl.plan.phraseBar & 15);
+            r.push(pl);
+        }
+    }
+    done.store(true, std::memory_order_release);
+    consumer.join();
+    const int lastPushed = (kPushes - 1) / 7 * 7;
+    CHECK(disorder == 0 && torn == 0, "two threads: %d out of order, %d torn Plans", disorder, torn);
+    CHECK(popped + r.dropped() == (events ? kPushes : 0), "two threads: %d popped + %d dropped, not %d", popped, r.dropped(), kPushes);
+    CHECK(lastPlan == lastPushed && plans > 0, "two threads: the last Plan %d, not %d (%d Plans)", lastPlan, lastPushed, plans);
+}
+
 // The SKY log's lines, their serials and the audio, over a Next chord, with Link On or Off.
 std::vector<std::string> skyRun(bool link, uint64_t& hash)
 {
@@ -396,6 +469,8 @@ int main()
     capture_reads_readouts();
     ring_order_and_capacity();
     ring_overflow_keeps_latest_plan();
+    ring_two_threads(true);
+    ring_two_threads(false);
     sky_log_unchanged();
     std::printf(fails ? "FAILED (%d)\n" : "ALL PASSED\n", fails);
     return fails ? 1 : 0;

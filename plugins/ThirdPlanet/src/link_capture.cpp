@@ -79,7 +79,7 @@ PlanState capture(const mpc::Transport& t)
     PlanState s{};   // (no default initializers: every byte set, so == compares only what is captured)
     s.playing = playing(), s.held = held(), s.locked = locked(), s.loopMode = loopMode(), s.timed = external();
     s.piece = clampU8(piece(), 127);
-    s.keyRoot = clampU8(par(P_ROOT), 11);
+    s.keyRoot = (uint8_t)((par(P_ROOT) % 12 + 12) % 12);   // (as the engine reads it: par[P_ROOT] % 12)
     s.keyMode = clampU8(par(P_MODE), 127);
     s.now = chord(chordCode());
     s.next = chord(nextChordCode());
