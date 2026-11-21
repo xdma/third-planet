@@ -12,8 +12,10 @@ BASE_SRC="$T/src/app_unit.cpp $T/src/engine_unit.cpp $T/src/power.cpp $T/src/sky
 status=0
 for c in ${1:-0 1}; do
     SRC=$BASE_SRC
-    [ "$c" = 1 ] && SRC="$BASE_SRC $T/src/link_codec.cpp"   # (compiled out with TP_LINK=0: #if TP_LINK inside)
-    for t in test_plugin test_controls test_equiv test_display test_screen test_sync; do
+    [ "$c" = 1 ] && SRC="$BASE_SRC $T/src/link_codec.cpp $T/src/link_capture.cpp"   # (compiled out with TP_LINK=0: #if TP_LINK inside)
+    TESTS="test_plugin test_controls test_equiv test_display test_screen test_sync"
+    [ "$c" = 1 ] && TESTS="$TESTS test_link"   # (Harmony Link's capture: TP_LINK=1 only)
+    for t in $TESTS; do
         c++ -std=c++17 -O2 -DTP_LINK=$c -I$T/src -Ideps/mpc-plugin-sdk/framework $T/tests/$t.cpp $SRC \
             -o $B/${t}_$c 2>&1 | grep -E "error" && { echo "$t (TP_LINK=$c): BUILD FAILED"; status=1; continue; }
         if $B/${t}_$c > $B/${t}_$c.log 2>&1; then

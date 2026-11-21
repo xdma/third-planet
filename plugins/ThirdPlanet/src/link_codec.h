@@ -2,7 +2,7 @@
 // Third Planet: Harmony Link v1's wire codec. The format is open and written down in docs/harmony-link.md (golden
 // vectors: docs/harmony-link-vectors.txt). Pure functions: no allocation, no I/O, no state, so the audio thread may
 // call the encoders. Messages are SysEx: F0 7D 54 50 <ver 01> <type> <seq> <payload...> F7, every byte between F0
-// and F7 7-bit.
+// and F7 7-bit. (Defined in link_codec.cpp only with TP_LINK=1.)
 #pragma once
 
 #include <cstdint>

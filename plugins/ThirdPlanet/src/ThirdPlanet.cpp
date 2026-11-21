@@ -16,7 +16,8 @@
 //                                     Next chord, New chords, Shake all, Reset, the nudges and shakes as
 //                                     one-shots (src/params.h)
 //   Sync                              the MPC's tempo and transport, sent to the FM-1 as MIDI clock
-//   Link                              Harmony Link (TP_LINK, src/tp_features.h): a switch only, so far
+//   Link                              Harmony Link (TP_LINK, src/tp_features.h): on, the audio thread captures the
+//                                     plan and the hand's events into linkRing_ (src/link_capture.h)
 //   display parameters                outputs only, after the controls: the status line (Pad, Chord, Hold, Lock)
 //                                     and the star-chart screen's (the arc, the ring, the slots, the particles,
 //                                     the planets, the log; src/sky.h), sent as they change, 24 a block at most
@@ -42,6 +43,10 @@
 #include "engine.h"
 #include "params.h"
 #include "sky.h"
+#if TP_LINK
+#include "link_capture.h"
+#include "link_ring.h"
+#endif
 
 namespace {
 
@@ -561,7 +566,7 @@ public:
         midiIn(ctx);
         clock(ctx);
         render(ctx);
-        watch(ctx.numFrames);
+        watch(ctx.numFrames, ctx.transport);
         // A block's notifications, kMaxSends in all: the one-shots' way back to Off (applyParams), then the display,
         // then the controls with what is left, never fewer than kMirrorMin.
         const int left = kMaxSends - actionSends_;
@@ -572,6 +577,9 @@ public:
     const tp::sky::Sky& sky() const { return sky_; }   // (tests: the screen's model, as the audio thread left it)
     bool logHot() const { return logHot_ > 0; }          // (tests: the newest log line is in the accent)
     bool linkOn() const { return idxLink_ >= 0 && getBool(idxLink_); }   // (Harmony Link: off when compiled out)
+#if TP_LINK
+    tp::link::LinkRing linkRing_;   // Harmony Link: the audio thread (watch) pushes, the link worker pops
+#endif
 
 private:
     static mpc::PluginInfo makeInfo()
@@ -873,8 +881,9 @@ private:
     }
 
     // The screen's model, once a block: the app's readouts and what it logged since the last block (all of it in
-    // one call, so a hand's action and the values it moved stay together), over the block's time.
-    void watch(int frames)
+    // one call, so a hand's action and the values it moved stay together), over the block's time. With Link on, the
+    // same events and readouts go to Harmony Link too (linkCapture).
+    void watch(int frames, const mpc::Transport& transport)
     {
         using namespace tp::app;
         Event events[kNumEvents];
@@ -898,7 +907,38 @@ private:
                 publishLog(logSeen_[l] % kLogSlots, sky_.logText(l));
                 if (l == 0) logHot_ = sky_.logText(0)[0] != 0 ? kLogHotFrames : 0;   // (a new event, or the lines cleared)
             }
+#if TP_LINK
+        if (linkOn()) linkCapture(events, in.numEvents, transport);
+        else linkHave_ = false;
+#else
+        (void)transport;
+#endif
     }
+
+#if TP_LINK
+    // Harmony Link, on the audio thread (spec 5.2): this block's events that the link forwards (the array watch() took
+    // for the Sky: there is no second takeEvents()), then the plan if it changed. The first block with Link on always
+    // pushes a plan. No allocation, locks or I/O: fixed-size copies into the ring.
+    void linkCapture(const tp::app::Event* events, int n, const mpc::Transport& transport)
+    {
+        tp::link::Item it{};
+        it.kind = tp::link::Item::Event;
+        for (int i = 0; i < n; ++i)
+            if (tp::link::forwards(events[i]))
+            {
+                const tp::app::Event& e = events[i];
+                it.ev = tp::link::LinkEvent{e.who, e.what, e.layer, e.param, e.from, e.to};
+                linkRing_.push(it);   // (full: dropped and counted)
+            }
+        const tp::link::PlanState now = tp::link::capture(transport);
+        if (linkHave_ && now == linkLast_) return;
+        linkLast_ = now;
+        linkHave_ = true;
+        it.kind = tp::link::Item::Plan;
+        it.plan = now;
+        linkRing_.push(it);
+    }
+#endif
 
     // The log's texts by serial (modulo kLogSlots), written on the audio thread and read by formatValue() on the
     // MPC's: words under a sequence count (odd while a text is being written; a reader retries if it moved).
@@ -1146,6 +1186,10 @@ private:
     std::atomic<uint32_t> logText_[kLogSlots][kLogWords];
     int idxSync_ = 0, idxKeyMode_ = 0, idxPadBase_ = 0;
     int idxLink_ = -1;   // (-1: Link compiled out, TP_LINK=0)
+#if TP_LINK
+    tp::link::PlanState linkLast_{};   // Harmony Link: the plan last pushed (audio thread)
+    bool linkHave_ = false;            // ... valid: false while Link is off, so turning it on pushes one
+#endif
 
     // the notes held, and what each one's press did
     uint8_t noteCount_[128] = {};

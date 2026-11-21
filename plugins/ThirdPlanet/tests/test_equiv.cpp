@@ -5,7 +5,8 @@
 // millisecond the panel's input acts. The audio and the saved project must be identical.
 //   c++ -std=c++17 -O2 -I plugins/ThirdPlanet/src -I deps/mpc-plugin-sdk/framework \
 //       plugins/ThirdPlanet/tests/test_equiv.cpp plugins/ThirdPlanet/src/app_unit.cpp \
-//       plugins/ThirdPlanet/src/engine_unit.cpp plugins/ThirdPlanet/src/power.cpp \
+//       plugins/ThirdPlanet/src/engine_unit.cpp plugins/ThirdPlanet/src/power.cpp plugins/ThirdPlanet/src/sky.cpp \
+//       plugins/ThirdPlanet/src/link_codec.cpp plugins/ThirdPlanet/src/link_capture.cpp \
 //       -o plugins/ThirdPlanet/build/tests/test_equiv
 #include <cstdio>
 #include <functional>
