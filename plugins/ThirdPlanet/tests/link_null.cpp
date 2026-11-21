@@ -34,7 +34,8 @@
 // (the base's control count: base indices from C on are display values), then a few facts for the log. Beside the output, <out>.blocks: every block's size (uint32), for the report only.
 // stderr: notifications filtered out (about Link, or past the base's count; with Link Off there should be none).
 //   c++ -std=c++17 -O2 -I <src> -I deps/mpc-plugin-sdk/framework plugins/ThirdPlanet/tests/link_null.cpp \
-//       <src>/app_unit.cpp <src>/engine_unit.cpp <src>/power.cpp <src>/sky.cpp [<src>/link_codec.cpp <src>/link_capture.cpp]
+//       <src>/app_unit.cpp <src>/engine_unit.cpp <src>/power.cpp <src>/sky.cpp [<src>/link_codec.cpp <src>/link_capture.cpp
+//       <src>/link_alsa.cpp <src>/link_worker.cpp]
 #include <cmath>
 #include <cstdint>
 #include <cstdio>

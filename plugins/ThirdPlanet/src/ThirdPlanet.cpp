@@ -17,7 +17,8 @@
 //                                     one-shots (src/params.h)
 //   Sync                              the MPC's tempo and transport, sent to the FM-1 as MIDI clock
 //   Link                              Harmony Link (TP_LINK, src/tp_features.h): on, the audio thread captures the
-//                                     plan and the hand's events into linkRing_ (src/link_capture.h)
+//                                     plan and the hand's events into linkRing_ (src/link_capture.h), and the
+//                                     link's own thread sends them to the computer (src/link_worker.h)
 //   display parameters                outputs only, after the controls: the status line (Pad, Chord, Hold, Lock)
 //                                     and the star-chart screen's (the arc, the ring, the slots, the particles,
 //                                     the planets, the log; src/sky.h), sent as they change, 24 a block at most
@@ -46,6 +47,7 @@
 #if TP_LINK
 #include "link_capture.h"
 #include "link_ring.h"
+#include "link_worker.h"
 #endif
 
 namespace {
@@ -421,9 +423,21 @@ public:
             for (std::atomic<uint32_t>& w : line) w.store(0, std::memory_order_relaxed);
         forgetHeld();
         displayReset_.store(true, std::memory_order_relaxed);
+#if TP_LINK
+        // Harmony Link's thread, made here and joined in the destructor, never from the audio thread (applyParams()
+        // and even prepare() can run there). It idles until the audio thread says Link is on (linkWant()).
+        linkWorker_.setEnabled(false);
+        linkWorker_.start();
+#endif
     }
 
-    ~ThirdPlanet() override { lease_.release(this); }
+    ~ThirdPlanet() override
+    {
+#if TP_LINK
+        linkWorker_.stop();   // (BYE, if the link was on)
+#endif
+        lease_.release(this);
+    }
 
     void prepare(double sampleRate, int maxBlockSize) override
     {
@@ -541,6 +555,10 @@ public:
         if (!lease_.claim(this, fresh))   // another instance owns the engine: silence, and the screen says so
         {
             forgetHeld();   // (what this instance held went with the engine; the owner boots its own)
+#if TP_LINK
+            linkWant(false);   // (no engine, nothing to tell: BYE; a Plan first when it is back)
+            linkHave_ = false;
+#endif
             if (!holding) sendBusy();
             return;
         }
@@ -579,6 +597,8 @@ public:
     bool linkOn() const { return idxLink_ >= 0 && getBool(idxLink_); }   // (Harmony Link: off when compiled out)
 #if TP_LINK
     tp::link::LinkRing linkRing_;   // Harmony Link: the audio thread (watch) pushes, the link worker pops
+    tp::link::Worker linkWorker_{linkRing_, &tp::link::loadAlsa, tp::link::systemClock()};   // (its thread: the constructor)
+    bool linkSend_ = true;          // (tests: false keeps the worker idle, and the test is the ring's consumer)
 #endif
 
 private:
@@ -605,6 +625,9 @@ private:
         pos_ = tp::kChunk;
         chunks_ = 0;
         forgetHeld();   // (power_on let go of everything)
+#if TP_LINK
+        linkHave_ = false;   // (Harmony Link: a Plan after every power-on, changed or not)
+#endif
         clockRunning_ = false;
         lastTick_ = LLONG_MIN;
         displayReset_.store(true, std::memory_order_relaxed);
@@ -663,7 +686,7 @@ private:
                     }
                     syncWas_ = v != 0;
                     break;
-                case Kind::Link: break;   // (nothing yet: Harmony Link starts here in a later step)
+                case Kind::Link: break;   // (read once a block in watch(): the link's thread is never started from here)
                 case Kind::KeyMode:
                 case Kind::PadBase: releaseHeld(); break;   // (read where used; a pad held now meant something else)
                 case Kind::Switch:
@@ -908,7 +931,9 @@ private:
                 if (l == 0) logHot_ = sky_.logText(0)[0] != 0 ? kLogHotFrames : 0;   // (a new event, or the lines cleared)
             }
 #if TP_LINK
-        if (linkOn()) linkCapture(events, in.numEvents, transport);
+        const bool link = linkOn();
+        linkWant(link && linkSend_);
+        if (link) linkCapture(events, in.numEvents, transport);
         else linkHave_ = false;
 #else
         (void)transport;
@@ -917,7 +942,8 @@ private:
 
 #if TP_LINK
     // Harmony Link, on the audio thread (spec 5.2): this block's events that the link forwards (the array watch() took
-    // for the Sky: there is no second takeEvents()), then the plan if it changed. The first block with Link on always
+    // for the Sky: there is no second takeEvents()), then the plan if it changed, or if the worker asked for one (it
+    // just opened the link and dropped what the ring held). The first block with Link on always
     // pushes a plan. No allocation, locks or I/O: fixed-size copies into the ring.
     void linkCapture(const tp::app::Event* events, int n, const mpc::Transport& transport)
     {
@@ -931,12 +957,22 @@ private:
                 linkRing_.push(it);   // (full: dropped and counted)
             }
         const tp::link::PlanState now = tp::link::capture(transport);
+        if (linkWorker_.takeWantPlan()) linkHave_ = false;
         if (linkHave_ && now == linkLast_) return;
         linkLast_ = now;
         linkHave_ = true;
         it.kind = tp::link::Item::Plan;
         it.plan = now;
         linkRing_.push(it);
+    }
+
+    // Link on or off, for the link's thread: one atomic store when it changes, nothing else (the thread opens and
+    // closes the link itself, in its own time).
+    void linkWant(bool on)
+    {
+        if (on == linkWant_) return;
+        linkWant_ = on;
+        linkWorker_.setEnabled(on);
     }
 #endif
 
@@ -1189,6 +1225,7 @@ private:
 #if TP_LINK
     tp::link::PlanState linkLast_{};   // Harmony Link: the plan last pushed (audio thread)
     bool linkHave_ = false;            // ... valid: false while Link is off, so turning it on pushes one
+    bool linkWant_ = false;            // what the link's thread was last told (audio thread)
 #endif
 
     // the notes held, and what each one's press did

@@ -6,12 +6,16 @@
 //   - the Plan carries the readouts (app_api.h) and the host's position in 16ths; chordMask() is the engine's chord;
 //   - the ring keeps Events in push order (dropping the newest when full) and never loses the latest Plan;
 //   - with Link On the SKY log and the audio are what they are with Link Off.
+//   - the plugin's own link thread takes the ring with Link On and idles with Link Off (every other test keeps it
+//     idle, linkSend_ = false, and pops the ring itself).
 // TP_LINK=1 only.
 //   c++ -std=c++17 -O2 -DTP_LINK=1 -I plugins/ThirdPlanet/src -I deps/mpc-plugin-sdk/framework \
 //       plugins/ThirdPlanet/tests/test_link.cpp plugins/ThirdPlanet/src/app_unit.cpp \
 //       plugins/ThirdPlanet/src/engine_unit.cpp plugins/ThirdPlanet/src/power.cpp plugins/ThirdPlanet/src/sky.cpp \
 //       plugins/ThirdPlanet/src/link_codec.cpp plugins/ThirdPlanet/src/link_capture.cpp \
+//       plugins/ThirdPlanet/src/link_alsa.cpp plugins/ThirdPlanet/src/link_worker.cpp \
 //       -o plugins/ThirdPlanet/build/tests/test_link
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -53,11 +57,12 @@ int idx(const char* id)
     std::exit(1);
 }
 
-std::unique_ptr<ThirdPlanet> make()
+std::unique_ptr<ThirdPlanet> make(bool worker = false)
 {
     std::memset(&ti, 0, sizeof ti);
     ti.sampleRate = 44100, ti.tempo = 120, ti.flags = kVstTempoValid | kVstPpqPosValid;   // (the MPC stopped)
     auto p = std::make_unique<ThirdPlanet>();
+    p->linkSend_ = worker;   // (false: the link's thread stays idle, and the test is the ring's one consumer)
     p->effect_ = &fakeFx;
     p->host_ = hostCb;
     p->internalSetSampleRate(44100.0);
@@ -457,10 +462,48 @@ void sky_log_unchanged()
     CHECK(hOff == hOn, "sky: the audio differs with Link On");
 }
 
+// The plugin's own link thread (everything above keeps it idle and pops the ring itself): made with the plugin, idle
+// with Link Off, the ring's consumer with Link On (here with or without a sequencer to send to: tests/
+// test_link_worker.cpp has the sending), asked for nothing from the audio thread but a flag, and joined with the plugin.
+void worker_takes_the_ring()
+{
+    using tp::link::Worker;
+    auto until = [](ThirdPlanet& p, auto done) {   // (blocks go on meanwhile, as on the MPC; 4 s at most)
+        for (int i = 0; i < 800 && !done(); ++i)
+        {
+            block(p);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return done();
+    };
+    auto p = make(true);
+    Worker& w = p->linkWorker_;
+    run(*p, 0.3);
+    std::this_thread::sleep_for(std::chrono::milliseconds(60));
+    CHECK(w.state.load() == Worker::Off && w.takenCount.load() == 0, "worker: at work with Link Off");
+    setLink(*p, true);
+    CHECK(until(*p, [&] { return w.takenCount.load() >= 1; }), "worker: Link On, and the worker took no Plan");
+    CHECK(w.state.load() != Worker::Off, "worker: Link On, and the link is not open");
+    Item it{};
+    CHECK(until(*p, [&] { return !p->linkRing_.pop(it); }), "worker: the ring is not drained");
+    const uint32_t taken = w.takenCount.load();
+    setLink(*p, false);
+    CHECK(until(*p, [&] { return w.state.load() == Worker::Off; }), "worker: Link Off, and the link is still open");
+    CHECK(w.takenCount.load() == taken, "worker: items taken with Link Off");
+    setLink(*p, true);   // (on again: a Plan again, although nothing changed)
+    CHECK(until(*p, [&] { return w.takenCount.load() > taken; }), "worker: Link On again, and no Plan");
+    CHECK(p->linkRing_.dropped() == 0, "worker: Events dropped");
+    p.reset();   // (with the link on: the thread is joined)
+    // an instance that never played: the thread is made and joined all the same
+    for (int i = 0; i < 20; ++i)
+        ThirdPlanet q;
+}
+
 } // namespace
 
 int main()
 {
+    worker_takes_the_ring();
     no_items_when_link_off();
     plan_on_change_only();
     next_chord_forwards_event_then_plan();

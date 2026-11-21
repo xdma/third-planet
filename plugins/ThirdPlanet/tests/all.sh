@@ -12,7 +12,7 @@ BASE_SRC="$T/src/app_unit.cpp $T/src/engine_unit.cpp $T/src/power.cpp $T/src/sky
 status=0
 for c in ${1:-0 1}; do
     SRC=$BASE_SRC
-    [ "$c" = 1 ] && SRC="$BASE_SRC $T/src/link_codec.cpp $T/src/link_capture.cpp"   # (compiled out with TP_LINK=0: #if TP_LINK inside)
+    [ "$c" = 1 ] && SRC="$BASE_SRC $T/src/link_codec.cpp $T/src/link_capture.cpp $T/src/link_alsa.cpp $T/src/link_worker.cpp"   # (compiled out with TP_LINK=0: #if TP_LINK inside)
     TESTS="test_plugin test_controls test_equiv test_display test_screen test_sync"
     [ "$c" = 1 ] && TESTS="$TESTS test_link"   # (Harmony Link's capture: TP_LINK=1 only)
     for t in $TESTS; do
@@ -38,6 +38,15 @@ for c in ${1:-0 1}; do
         t=test_link_codec
         if c++ -std=c++17 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -DTP_LINK=1 -I$T/src \
             $T/tests/$t.cpp $T/src/link_codec.cpp -o $B/$t 2>&1 | grep -E "error"; then
+            echo "$t (TP_LINK=1): BUILD FAILED"; status=1
+        elif $B/$t > $B/$t.log 2>&1; then
+            echo "$t (TP_LINK=1): passed"
+        else
+            echo "$t (TP_LINK=1): FAILED"; grep -m 10 FAIL $B/$t.log; status=1
+        fi
+        t=test_link_worker   # Harmony Link's thread against a fake sequencer: built alone (under ASan and UBSan)
+        if c++ -std=c++17 -O1 -g -pthread -fsanitize=address,undefined -fno-sanitize-recover=all -DTP_LINK=1 -I$T/src \
+            $T/tests/$t.cpp $T/src/link_worker.cpp $T/src/link_alsa.cpp $T/src/link_codec.cpp -o $B/$t 2>&1 | grep -E "error"; then
             echo "$t (TP_LINK=1): BUILD FAILED"; status=1
         elif $B/$t > $B/$t.log 2>&1; then
             echo "$t (TP_LINK=1): passed"

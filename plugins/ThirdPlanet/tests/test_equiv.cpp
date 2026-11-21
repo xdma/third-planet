@@ -7,6 +7,7 @@
 //       plugins/ThirdPlanet/tests/test_equiv.cpp plugins/ThirdPlanet/src/app_unit.cpp \
 //       plugins/ThirdPlanet/src/engine_unit.cpp plugins/ThirdPlanet/src/power.cpp plugins/ThirdPlanet/src/sky.cpp \
 //       plugins/ThirdPlanet/src/link_codec.cpp plugins/ThirdPlanet/src/link_capture.cpp \
+//       plugins/ThirdPlanet/src/link_alsa.cpp plugins/ThirdPlanet/src/link_worker.cpp \
 //       -o plugins/ThirdPlanet/build/tests/test_equiv
 #include <cstdio>
 #include <functional>

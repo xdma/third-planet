@@ -46,6 +46,7 @@ harness() {   # name src [defines...]
     local name=$1 src=$2 link=
     shift 2
     [ -f "$src/link_codec.cpp" ] && link="$src/link_codec.cpp $src/link_capture.cpp"   # (not in the base; #if TP_LINK inside)
+    [ -f "$src/link_worker.cpp" ] && link="$link $src/link_alsa.cpp $src/link_worker.cpp"
     c++ -std=c++17 -O2 "$@" -I"$src" -I"$FW" -o "$B/$name" "$T/tests/link_null.cpp" \
         "$src/app_unit.cpp" "$src/engine_unit.cpp" "$src/power.cpp" "$src/sky.cpp" $link
 }
