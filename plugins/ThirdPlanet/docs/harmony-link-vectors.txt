@@ -1,0 +1,36 @@
+# Harmony Link v1: golden vectors (docs/harmony-link.md is the format).
+# Each vector is one line "NAME: hex bytes", the whole message from F0 to F7. The comment line(s) just before it
+# list the decoded fields. tests/test_link_codec.cpp reads this file at run time: the encoder must produce these
+# bytes, and the decoder must accept the commands. A decoder in any language can be checked against the same lines.
+
+# PLAN, seq 0x21 (146 bytes: 7 header + 138 payload + F7).
+# flags: playing 1, held 1, locked 0, loopMode 1, timed 1; piece 7, keyRoot 4 (E), keyMode 3
+# now: root 4, mask {3,4,8,11} = 0x918, name "Emaj7#11" (all 8 characters, no NUL)
+# next: root 9, mask {0,4,7,9,11} = 0xA91, name "Am9"; barsToNext -2 (Hold on), barsToChange -1
+# progPos -1 (none), progCount 6, walk 2
+# slot 0: written, root 0, mask {0,4,7} = 0x091, "C"
+# slot 1: walk, root 2, mask {2,5,9} = 0x224, "Dm"
+# slot 2: gap, root 127, mask 0, ""
+# slot 3: written, root 5, mask {0,3,5,9} = 0x229, "F7"
+# slot 4: walk, root 7, mask {2,7,11} = 0x884, "G"
+# slot 5: walk, root 10, mask {0,5,10} = 0x421, "Bbsus2"
+# slot 6: gap, root 127, mask 0, ""
+# slot 7: written, root 1, mask {1,4,7} = 0x092, "C#dim"
+# section 3 (Bridge), phraseBar 6, evolveChance 35, densityShift -5
+# heardMask 0x1D (layers 0, 2, 3, 4), activity 90 0 45 127 13; pos16 13
+PLAN-1: F0 7D 54 50 01 01 21 1B 07 04 03 04 18 12 45 6D 61 6A 37 23 31 31 09 11 15 41 6D 39 00 00 00 00 00 3E 3F 00 06 02 02 00 11 01 43 00 00 00 00 00 00 00 01 02 24 04 44 6D 00 00 00 00 00 00 00 7F 00 00 00 00 00 00 00 00 00 00 02 05 29 04 46 37 00 00 00 00 00 00 01 07 04 11 47 00 00 00 00 00 00 00 01 0A 21 08 42 62 73 75 73 32 00 00 00 7F 00 00 00 00 00 00 00 00 00 00 02 01 12 01 43 23 64 69 6D 00 00 00 03 06 23 3B 1D 5A 00 2D 7F 0D 0D F7
+
+# EVENT, seq 0x22 (17 bytes): who 0 (You), what 6 (next chord), layer -1, param -1, from 0, to 0
+EVENT-1: F0 7D 54 50 01 02 22 00 06 00 7F 3F 00 40 00 40 F7
+
+# EVENT, seq 0x23: who 1 (Evolve), what 0 (parameter), layer 3, param 17, from -100, to 300
+EVENT-2: F0 7D 54 50 01 02 23 01 00 04 11 40 1C 3F 2C 42 F7
+
+# BYE, seq 5 (8 bytes, no payload)
+BYE-1: F0 7D 54 50 01 03 05 F7
+
+# FADE (to the plugin), seq 0: level 0, bars 16
+FADE-1: F0 7D 54 50 01 10 00 00 10 00 F7
+
+# HOLD (to the plugin), seq 0: on 1
+HOLD-1: F0 7D 54 50 01 11 00 01 F7

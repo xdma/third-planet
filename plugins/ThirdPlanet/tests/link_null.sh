@@ -43,10 +43,11 @@ git archive "$BASE_REV" "$T" | tar -x -C "$B/base" || { echo "cannot extract $BA
 
 # ---- the harness, three ways ----
 harness() {   # name src [defines...]
-    local name=$1 src=$2
+    local name=$1 src=$2 link=
     shift 2
+    [ -f "$src/link_codec.cpp" ] && link="$src/link_codec.cpp"   # (not in the base; #if TP_LINK inside)
     c++ -std=c++17 -O2 "$@" -I"$src" -I"$FW" -o "$B/$name" "$T/tests/link_null.cpp" \
-        "$src/app_unit.cpp" "$src/engine_unit.cpp" "$src/power.cpp" "$src/sky.cpp"
+        "$src/app_unit.cpp" "$src/engine_unit.cpp" "$src/power.cpp" "$src/sky.cpp" $link
 }
 harness a "$BT/src" & pa=$!
 harness b "$T/src" -DTP_LINK=0 & pb=$!

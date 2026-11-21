@@ -12,7 +12,7 @@
 //   8. every text fits the MPC's 31 bytes in the glyphs its fonts have; a value written over is corrected.
 //   c++ -std=c++17 -O2 -I plugins/ThirdPlanet/src -I deps/mpc-plugin-sdk/framework \
 //       plugins/ThirdPlanet/tests/test_display.cpp plugins/ThirdPlanet/src/app_unit.cpp \
-//       plugins/ThirdPlanet/src/engine_unit.cpp plugins/ThirdPlanet/src/power.cpp plugins/ThirdPlanet/src/sky.cpp \
+//       plugins/ThirdPlanet/src/engine_unit.cpp plugins/ThirdPlanet/src/power.cpp plugins/ThirdPlanet/src/sky.cpp plugins/ThirdPlanet/src/link_codec.cpp \
 //       -o plugins/ThirdPlanet/build/tests/test_display
 #include <cctype>
 #include <cstdio>

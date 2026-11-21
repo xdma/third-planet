@@ -8,9 +8,11 @@ cd "$(dirname "$0")/../../.." || exit 1
 T=plugins/ThirdPlanet
 B=$T/build/tests
 mkdir -p "$B"
-SRC="$T/src/app_unit.cpp $T/src/engine_unit.cpp $T/src/power.cpp $T/src/sky.cpp"
+BASE_SRC="$T/src/app_unit.cpp $T/src/engine_unit.cpp $T/src/power.cpp $T/src/sky.cpp"
 status=0
 for c in ${1:-0 1}; do
+    SRC=$BASE_SRC
+    [ "$c" = 1 ] && SRC="$BASE_SRC $T/src/link_codec.cpp"   # (compiled out with TP_LINK=0: #if TP_LINK inside)
     for t in test_plugin test_controls test_equiv test_display test_screen test_sync; do
         c++ -std=c++17 -O2 -DTP_LINK=$c -I$T/src -Ideps/mpc-plugin-sdk/framework $T/tests/$t.cpp $SRC \
             -o $B/${t}_$c 2>&1 | grep -E "error" && { echo "$t (TP_LINK=$c): BUILD FAILED"; status=1; continue; }
@@ -29,6 +31,17 @@ for c in ${1:-0 1}; do
         echo "test_fuzz (TP_LINK=$c): passed"
     else
         echo "test_fuzz (TP_LINK=$c): FAILED"; tail -5 $B/test_fuzz_$c.log; status=1
+    fi
+    if [ "$c" = 1 ]; then   # Harmony Link's wire codec: pure, so built alone (and under ASan and UBSan)
+        t=test_link_codec
+        if c++ -std=c++17 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -DTP_LINK=1 -I$T/src \
+            $T/tests/$t.cpp $T/src/link_codec.cpp -o $B/$t 2>&1 | grep -E "error"; then
+            echo "$t (TP_LINK=1): BUILD FAILED"; status=1
+        elif $B/$t > $B/$t.log 2>&1; then
+            echo "$t (TP_LINK=1): passed"
+        else
+            echo "$t (TP_LINK=1): FAILED"; grep -m 10 FAIL $B/$t.log; status=1
+        fi
     fi
 done
 [ $status -eq 0 ] && echo "ALL TESTS PASSED" || echo "TESTS FAILED"

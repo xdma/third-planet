@@ -16,7 +16,7 @@
 //      nudge's or shake's burst shows the action newest and its two largest moves below it (ruling R11).
 //   c++ -std=c++17 -O2 -I plugins/ThirdPlanet/src -I deps/mpc-plugin-sdk/framework \
 //       plugins/ThirdPlanet/tests/test_screen.cpp plugins/ThirdPlanet/src/sky.cpp plugins/ThirdPlanet/src/app_unit.cpp \
-//       plugins/ThirdPlanet/src/engine_unit.cpp plugins/ThirdPlanet/src/power.cpp \
+//       plugins/ThirdPlanet/src/engine_unit.cpp plugins/ThirdPlanet/src/power.cpp plugins/ThirdPlanet/src/link_codec.cpp \
 //       -o plugins/ThirdPlanet/build/tests/test_screen
 #include <algorithm>
 #include <cmath>
