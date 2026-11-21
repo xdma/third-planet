@@ -209,13 +209,13 @@ std::vector<std::string> displayIds()
     auto many = [&](const char* stem, int n) {
         for (int i = 1; i <= n; ++i) ids.push_back(stem + std::to_string(i));
     };
-    many("d_slot", 8), many("d_slotname", 8), many("d_px", 8), many("d_py", 8), many("d_planet", 5), many("d_log", 3),
+    many("d_slot", 8), many("d_slotname", 8), many("d_px", 4), many("d_py", 4), many("d_planet", 5), many("d_log", 3),
         many("d_drift", 5);
     ids.insert(ids.end(), {"d_density", "d_step", "d_ext", "d_source", "d_solo", "d_log1hot", "d_tempo"});
     return ids;
 }
 enum { xPad, xChord, xHold, xLock, xSection, xPhrase, xEvolve, xNext, xNextIn, xProg, xRing, xSlot, xSlotName = xSlot + 8,
-       xPx = xSlotName + 8, xPy = xPx + 8, xPlanet = xPy + 8, xLog = xPlanet + 5, xDrift = xLog + 3, xDensity = xDrift + 5,
+       xPx = xSlotName + 8, xPy = xPx + 4, xPlanet = xPy + 4, xLog = xPlanet + 5, xDrift = xLog + 3, xDensity = xDrift + 5,
        xStep, xExt, xSource, xSolo, xLog1Hot, xTempo, xCount };
 constexpr int kD0 = tp::kNumControls;   // the first display parameter's index
 
@@ -261,8 +261,8 @@ void expected(ThirdPlanet& p, double* w)
     {
         w[xSlot + i] = i == progPos() ? 3 : (int)slotState(i);
         w[xSlotName + i] = slotChordCode(i);
-        w[xPx + i] = sky.puck(i).x, w[xPy + i] = sky.puck(i).y;
     }
+    for (int i = 0; i < 4; ++i) w[xPx + i] = sky.puck(i).x, w[xPy + i] = sky.puck(i).y;
     for (int l = 0; l < 5; ++l)
     {
         w[xPlanet + l] = sky.planetFrame(l);
@@ -305,8 +305,8 @@ struct Lag
         }
     }
     // The longest a parameter may lag: a block or two for the budget; the paced ones a tenth of a second more; a
-    // puck its half's turn (50 ms) as well.
-    static long limit(int k, int bs) { return 3L * bs + (xIsPuck(k) ? 4410 + 2205 : xIsPaced(k) ? 4410 : 0); }
+    // puck its turn, a fifth of a second (R23).
+    static long limit(int k, int bs) { return 3L * bs + (xIsPuck(k) ? 8820 : xIsPaced(k) ? 4410 : 0); }
     void check(int bs, const char* what)
     {
         const std::vector<std::string> ids = displayIds();
@@ -429,8 +429,8 @@ void displayMirrorsState()
     CHECK(lag.seen[xRing].size() >= 10, "the ring took only %zu values", lag.seen[xRing].size());
     CHECK(lag.seen[xStep].size() >= 8, "the step took only %zu values", lag.seen[xStep].size());
     CHECK(lag.seen[xPhrase].size() >= 4, "the phrase took only %zu values", lag.seen[xPhrase].size());
-    CHECK(lag.seen[xPx].size() >= 20 && lag.seen[xPy + 4].size() >= 20, "the pucks hardly moved (%zu, %zu values)",
-          lag.seen[xPx].size(), lag.seen[xPy + 4].size());
+    CHECK(lag.seen[xPx].size() >= 20 && lag.seen[xPy + 2].size() >= 20, "the pucks hardly moved (%zu, %zu values)",
+          lag.seen[xPx].size(), lag.seen[xPy + 2].size());
     CHECK(lag.seen[xPlanet + 1].size() >= 3, "the Seq's planet took only %zu frames", lag.seen[xPlanet + 1].size());
     CHECK(lag.seen[xLog].size() >= 4, "the log's first line took only %zu values", lag.seen[xLog].size());
     CHECK(lag.seen[xSlotName + 7].size() >= 2, "the last slot's name never changed (Endless)");
@@ -475,7 +475,7 @@ void budgetPerBlock()
         std::vector<long> stale((size_t)tp::kNumControls, 0);
         std::vector<long> sentAt((size_t)xCount, -1000000);
         DriftForms forms;
-        long soonest = 1000000, bothHalves = 0;
+        long soonest = 1000000, puckSoonest = 1000000, puckLast = -1000000;
         std::string soonestId;
         long worstCtl = 0, blocks = 0, total = 0, shown = 0;
         int most = 0, worstI = -1;
@@ -485,16 +485,24 @@ void budgetPerBlock()
             if (count > most) most = count;
             ++blocks, total += count;
             for (int i : notified) shown += i >= kD0;
-            bool half[2] = {false, false};
+            bool pucks = false;
             for (int i : notified)
             {
                 const int k = i - kD0;
                 if (k < 0 || !(xIsPuck(k) || xIsPaced(k))) continue;
-                if (xIsPuck(k)) half[(k - xPx) % 8 / 4] = true;
+                if (xIsPuck(k))
+                {
+                    pucks = true;
+                    continue;
+                }
                 if (done - sentAt[(size_t)k] < soonest) soonest = done - sentAt[(size_t)k], soonestId = p->param(i).id;
                 sentAt[(size_t)k] = done;
             }
-            bothHalves += half[0] && half[1];
+            if (pucks)   // (the blocks that send particles, whichever of them: a fifth of a second apart at least)
+            {
+                if (done - puckLast < puckSoonest) puckSoonest = done - puckLast;
+                puckLast = done;
+            }
             lag.block(*p, n, done > 44100);
             if (blocks % 8 == 0) driftTexts(*p, forms);
             for (int i = 0; i < tp::kNumControls; ++i)
@@ -520,9 +528,9 @@ void budgetPerBlock()
         CHECK(most <= 24, "blocks of %d: %d notifications in one block", bs, most);
         CHECK(worstCtl <= 44100, "blocks of %d: control %s was not sent back for %ld frames", bs,
               worstI >= 0 ? tp::kParams[worstI].id : "?", worstCtl);
-        // (the pace: a particle, a planet, a drift 10 times a second at most; the particles a half at a time)
+        // (the pace: a planet, a drift 10 times a second at most; the particles together, 5 times a second (R23))
         CHECK(soonest >= 4410, "blocks of %d: %s was sent again after %ld frames", bs, soonestId.c_str(), soonest);
-        CHECK(bothHalves == 0, "blocks of %d: %ld blocks sent particles of both halves", bs, bothHalves);
+        CHECK(puckSoonest >= 8820, "blocks of %d: particles were sent again after %ld frames", bs, puckSoonest);
         char what[48];
         std::snprintf(what, sizeof what, "budget_per_block (%d)", bs);
         lag.check(bs, what);
@@ -575,7 +583,7 @@ void restSendsNothing()
     CHECK(late == 0, "at rest %ld display sends after 4 s (the last: %s)", late, lateId.c_str());
     CHECK(p->getInt(kD0 + xStep) == 16, "at rest the step shows %d", p->getInt(kD0 + xStep));
     CHECK(text(*p, kD0 + xEvolve) == " ", "at rest Evolve shows '%s'", text(*p, kD0 + xEvolve).c_str());
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < 4; ++i)
         CHECK(std::fabs(p->get(kD0 + xPx + i) - 0.5f) < 0.003f && std::fabs(p->get(kD0 + xPy + i) - 0.5f) < 0.003f,
               "at rest puck %d is not parked", i + 1);
 }

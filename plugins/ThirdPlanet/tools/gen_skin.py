@@ -187,8 +187,8 @@ DISPLAY = ([("d_pad", "Pad"), ("d_chord", "Chord"), ("d_hold", "Hold status"), (
             ("d_ring", "Chord ring")]
            + [("d_slot%d" % i, "Slot %d" % i) for i in range(1, 9)]
            + [("d_slotname%d" % i, "Slot chord %d" % i) for i in range(1, 9)]
-           + [("d_px%d" % i, "Particle %d X" % i) for i in range(1, 9)]
-           + [("d_py%d" % i, "Particle %d Y" % i) for i in range(1, 9)]
+           + [("d_px%d" % i, "Particle %d X" % i) for i in range(1, L.PUCKS + 1)]
+           + [("d_py%d" % i, "Particle %d Y" % i) for i in range(1, L.PUCKS + 1)]
            + [("d_planet%d" % i, "Planet %d" % i) for i in range(1, 6)]
            + [("d_log%d" % i, "Log line %d" % i) for i in range(1, 4)]
            + [("d_drift%d" % i, "Filter drift %d" % i) for i in range(1, 6)]
@@ -305,10 +305,10 @@ def sky_tab(c, d):
     P = lambda i: "Parameter %d" % i
     # The static background in pieces around the outer pad: no image under a puck (R22).
     comps = [image("background " + f[len("bg_sky_"):-len(".png")], f, r) for f, r in L.SKY_BG.items()]
-    # The particles (R12): pucks 1-4 are the Sequence on the inner orbit, 5-8 Sequence 2 on the outer. Parked
-    # pucks sit at (0.5, 0.5), behind the disc.
-    for i in range(1, 9):
-        pad = L.ORBIT_INNER if i <= 4 else L.ORBIT_OUTER
+    # The particles (R12, R23): pucks 1-2 are the Sequence on the inner orbit, 3-4 Sequence 2 on the outer.
+    # Parked pucks sit at (0.5, 0.5), behind the disc.
+    for i in range(1, L.PUCKS + 1):
+        pad = L.ORBIT_INNER if i <= L.PUCKS // 2 else L.ORBIT_OUTER
         comps.append(entry("puck %d" % i, "XYPad", {"version": 1, "xPositionHandle": P(d["d_px%d" % i]),
                                                      "yPositionHandle": P(d["d_py%d" % i]), "image": "puck.png"},
                            L.rect_str(pad)))

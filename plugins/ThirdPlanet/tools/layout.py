@@ -80,8 +80,9 @@ HEADER_H = 56
 HEADER_RULE_Y = 57
 
 SKY_CX, SKY_CY = 660, 380
-# R12: the Sequence on the INNER orbit, Sequence 2 on the OUTER (as the FM-1). Pucks 0..3 are the Sequence
-# (inner pad), 4..7 Sequence 2 (outer pad). A puck's x, y (0..1) span its pad.
+# R12: the Sequence on the INNER orbit, Sequence 2 on the OUTER (as the FM-1). R23: 2 pucks an orbit (src/sky.h
+# kPucks), 0..1 the Sequence (inner pad), 2..3 Sequence 2 (outer pad). A puck's x, y (0..1) span its pad.
+PUCKS = 4
 ORBIT_INNER = centred(SKY_CX, SKY_CY, 340, 220)    # Sequence
 ORBIT_OUTER = centred(SKY_CX, SKY_CY, 460, 300)    # Sequence 2
 ORBIT_RX, ORBIT_RY = 230, 150                      # the outer orbit

@@ -69,15 +69,15 @@ class SkinTest(unittest.TestCase):
         self.assertEqual(len(keys), len(set(keys)))
 
     def test_pucks_on_their_orbits(self):
-        """R12: pucks 1-4 (the Sequence) on the inner pad, 5-8 (Sequence 2) on the outer."""
+        """R12, R23: pucks 1-2 (the Sequence) on the inner pad, 3-4 (Sequence 2) on the outer."""
         pads = self.of_type("XYPad")
-        self.assertEqual(len(pads), 8)
+        self.assertEqual(len(pads), 4)
         for i, c in enumerate(pads, 1):
             data = c["componentData"]["data"]
             self.assertEqual(data["xPositionHandle"], "Parameter %d" % self.disp["d_px%d" % i])
             self.assertEqual(data["yPositionHandle"], "Parameter %d" % self.disp["d_py%d" % i])
             self.assertEqual(data["image"], "puck.png")
-            self.assertEqual(rect(c), L.ORBIT_INNER if i <= 4 else L.ORBIT_OUTER)
+            self.assertEqual(rect(c), L.ORBIT_INNER if i <= 2 else L.ORBIT_OUTER)
 
     def test_z_order(self):
         """The background pieces first; the disc after every puck (parked pucks hide behind it); the cover last, a

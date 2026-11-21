@@ -26,7 +26,8 @@ struct SkyInput
     int piece;
 };
 
-constexpr int kPucks = 8;            // 0..3 Sequence (inner orbit), 4..7 Sequence 2 (outer), as ui.c ORB_RX0/RX1
+constexpr int kPucks = 4;            // 0..1 Sequence (inner orbit, ui.c ORB_RX0), 2..3 Sequence 2 (outer, ORB_RX1):
+                                     // 2 an orbit (ruling R23: each costs the MPC's screen thread)
 constexpr int kLogLines = 3;
 constexpr int kTextMax = 32;         // incl. NUL: 31 bytes of text
 constexpr int kPlanets = 5;          // Drone, Seq, Lead, Seq 2, Atmos (the mute layers)

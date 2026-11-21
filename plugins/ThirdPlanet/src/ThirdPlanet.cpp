@@ -72,7 +72,7 @@ enum Disp : int
     kDRing,         // 0 no ring; 1..33 the chord's dots 0..32; 34..66 in its last bar; 67..99 held
     kDSlot,         // x 8: 0 a gap, 1 the walk's, 2 written, 3 the one playing
     kDSlotName = kDSlot + kSlots,       // x 8: the slot's chord code
-    kDPx = kDSlotName + kSlots,         // x 8, then kDPy x 8: the particles, 0..1 in their orbit's pad
+    kDPx = kDSlotName + kSlots,         // x 4, then kDPy x 4: the particles, 0..1 in their orbit's pad
     kDPy = kDPx + kPucks,
     kDPlanet = kDPy + kPucks,           // x 5: the layer's planet frame (Sky::planetFrame)
     kDLog = kDPlanet + kPlanets,        // x 3: the log line's serial; its text is the line
@@ -93,7 +93,7 @@ static_assert(EN_NPROG == 8 && EN_NSEC == 4 && EN_NWALK == 3 && tp::app::kNumLay
 constexpr int kMirrorMin = 4;         // of a block's kMaxSends, the controls always get this many
 constexpr int kPuckUnit = 1000;       // a particle's 0..1, in the thousandths the scheduler compares
 constexpr int kPuckMove = 2;          // ... sent when it moved by more than this
-constexpr int kPuckFrames = 2205;     // half of the particles every 50 ms, the halves in turn: 10 Hz each
+constexpr int kPuckFrames = 8820;     // all the particles together every 200 ms: 5 Hz (ruling R23)
 constexpr int kPaceFrames = 4410;     // the planets and the drifts: 10 a second at most
 constexpr int kDriftMax = 45, kDriftStill = 100;       // (tenths of an octave: ui.c shows 4.5 at most)
 constexpr int kDensityMax = 100, kDensityStill = 200;
@@ -979,8 +979,8 @@ private:
 
     // The display values that changed since they were last sent, to the MPC, `budget` of them at most; returns how
     // many. In this order: a value the MPC wrote over and the status line, the screen's texts and states, then the
-    // particles. The planets and the drifts go 10 times a second at most; half of the particles every 50 ms, the
-    // halves in turn, and only those that moved. What does not fit waits for the next block.
+    // particles. The planets and the drifts go 10 times a second at most; the particles that moved every 200 ms, all
+    // in one block (R23: the MPC repaints their pads once). What does not fit waits for the next block.
     // `frames`: the block's length, which is the clock for all of this.
     int sendDisplay(const int* now, int budget, int frames)
     {
@@ -1006,22 +1006,12 @@ private:
         puckClock_ = puckClock_ < kPuckFrames ? puckClock_ + frames : kPuckFrames;
         if (puckClock_ >= kPuckFrames)
         {
-            bool all = true;   // (a half that did not fit whole keeps its turn)
-            for (int i = puckHalf_ * (kPucks / 2), end = i + kPucks / 2; i < end; ++i)
+            int moved = 0;   // (all of them or none: what does not fit whole keeps its turn for the next block)
+            for (int k = kDPx; k < kDPlanet; ++k) moved += puckMoved(now, k) ? 1 : 0;
+            if (sent + moved <= budget)
             {
-                const bool x = puckMoved(now, kDPx + i), y = puckMoved(now, kDPy + i);
-                if (!x && !y) continue;
-                if (sent + (x ? 1 : 0) + (y ? 1 : 0) > budget)
-                {
-                    all = false;
-                    break;
-                }
-                if (x) put(kDPx + i, now[kDPx + i]), ++sent;
-                if (y) put(kDPy + i, now[kDPy + i]), ++sent;
-            }
-            if (all)
-            {
-                puckHalf_ ^= 1;
+                for (int k = kDPx; k < kDPlanet; ++k)
+                    if (puckMoved(now, k)) put(k, now[k]), ++sent;
                 puckClock_ = 0;
             }
         }
@@ -1117,7 +1107,7 @@ private:
     std::atomic<bool> fixOne_[kNumDisplay];
     int sinceFix_ = kFixFrames;
     int sinceSent_[kNumDisplay] = {};        // frames since each was sent, up to kPaceFrames
-    int puckClock_ = 0, puckHalf_ = 0;       // frames since a half of the particles went; the half whose turn it is
+    int puckClock_ = 0;                      // frames since the particles went
     int actionSends_ = 0;                    // one-shots sent back to Off in this block
     std::atomic<bool> loadHold_{false};      // a project loaded: hold the display
     int hold_ = 0;                           // ... for this many frames more

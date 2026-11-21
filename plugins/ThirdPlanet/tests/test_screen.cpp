@@ -905,69 +905,75 @@ std::string fmt(const Event& e, int piece = 0)
 
 void particles_launch_and_park()
 {
+    // R23: 2 pucks an orbit, 0..1 the Sequence (inner), 2..3 Sequence 2 (outer)
+    static_assert(tp::sky::kPucks == 4, "2 pucks an orbit");
     Sky s;
     SkyInput in = skyIn();
     s.advance(in, 0);
-    CHECK(unparked(s, 0, 8) == 0, "parked at start");
-    // 4 hits on the Sequence, one a call: 4 inner-orbit pucks at 0.39 x (hits + reps)
-    for (uint32_t h = 1; h <= 4; h++)
+    CHECK(unparked(s, 0, 4) == 0, "parked at start");
+    // 2 hits on the Sequence, one a call: the 2 inner-orbit pucks at 0.39 x (hits + reps)
+    for (uint32_t h = 1; h <= 2; h++)
     {
         in.hits[0] = h;
         s.advance(in, 0);
     }
-    CHECK(unparked(s, 0, 4) == 4 && unparked(s, 4, 8) == 0, "4 Sequence pucks: %d, Sequence 2 %d", unparked(s, 0, 4), unparked(s, 4, 8));
-    for (int k = 0; k < 4; k++)
+    CHECK(unparked(s, 0, 2) == 2 && unparked(s, 2, 4) == 0, "2 Sequence pucks: %d, Sequence 2 %d", unparked(s, 0, 2), unparked(s, 2, 4));
+    for (int k = 0; k < 2; k++)
         CHECK(at(s.puck(k), 0.39 * (k + 1)), "puck %d at %.3f: %.4f %.4f", k, 0.39 * (k + 1), s.puck(k).x, s.puck(k).y);
     // 47 ms: no step; 48 ms: each 0.06 on (the Sequence's)
     s.advance(in, 47);
-    for (int k = 0; k < 4; k++)
+    for (int k = 0; k < 2; k++)
         CHECK(at(s.puck(k), 0.39 * (k + 1)), "puck %d not yet a step", k);
     s.advance(in, 1);
-    for (int k = 0; k < 4; k++)
+    for (int k = 0; k < 2; k++)
         CHECK(at(s.puck(k), 0.39 * (k + 1) + 0.06), "puck %d one step on", k);
     // a hit lives 63 steps (about 3 s): alive at step 62, parked at 63, a little at a time
     for (int t = 0; t < 61 * 48 / 8; t++)
         s.advance(in, 8);
-    CHECK(unparked(s, 0, 4) == 4, "alive after 62 steps: %d", unparked(s, 0, 4));
+    CHECK(unparked(s, 0, 2) == 2, "alive after 62 steps: %d", unparked(s, 0, 2));
     s.advance(in, 48);
-    CHECK(unparked(s, 0, 8) == 0, "parked after 63 steps (3024 ms): %d", unparked(s, 0, 8));
+    CHECK(unparked(s, 0, 4) == 0, "parked after 63 steps (3024 ms): %d", unparked(s, 0, 4));
 
-    // 10 hits in one call: 3 launched (the counts 5, 6, 7), the rest still counted for the next angle
+    // 10 hits in one call: 3 launched (the counts 3, 4, 5), the rest still counted for the next angle. The third
+    // finds the orbit full: of equal lives the first is taken
+    in.hits[0] = 12;
+    s.advance(in, 0);
+    CHECK(unparked(s, 0, 2) == 2, "3 a call: %d", unparked(s, 0, 2));
+    CHECK(at(s.puck(0), 0.39 * 5) && at(s.puck(1), 0.39 * 4), "capped: puck 0 at count 5, puck 1 at 4");
+    s.advance(in, 48);
+    in.hits[0] = 13;
+    s.advance(in, 0);
+    CHECK(at(s.puck(0), 0.39 * 13), "the skipped hits count: puck 0 at 0.39 x 13");
+    CHECK(at(s.puck(1), 0.39 * 4 + 0.06), "puck 1 kept");
+    // full orbit: the oldest (least life) is taken, not the first
+    s.advance(in, 48);
     in.hits[0] = 14;
     s.advance(in, 0);
-    CHECK(unparked(s, 0, 4) == 3, "3 a call: %d", unparked(s, 0, 4));
-    for (int k = 0; k < 3; k++)
-        CHECK(at(s.puck(k), 0.39 * (5 + k)), "capped puck %d", k);
-    s.advance(in, 48);
-    in.hits[0] = 15;
-    s.advance(in, 0);
-    CHECK(at(s.puck(3), 0.39 * 15), "the skipped hits count: puck 3 at 0.39 x 15");
-    // full orbit: the oldest (least life; of equals, the first) is taken, not the newest
-    in.hits[0] = 16;
-    s.advance(in, 0);
-    CHECK(at(s.puck(0), 0.39 * 16), "the oldest puck reused");
-    CHECK(at(s.puck(1), 0.39 * 6 + 0.06) && at(s.puck(2), 0.39 * 7 + 0.06) && at(s.puck(3), 0.39 * 15), "the others kept");
+    CHECK(at(s.puck(1), 0.39 * 14), "the oldest puck reused");
+    CHECK(at(s.puck(0), 0.39 * 13 + 0.06), "the newer kept");
 
     // Sequence 2: the outer orbit, 3 rad on, 0.045 a step
     Sky s2;
     SkyInput i2 = skyIn();
     i2.hits[1] = 1;
     s2.advance(i2, 0);
-    CHECK(unparked(s2, 0, 4) == 0 && unparked(s2, 4, 8) == 1 && at(s2.puck(4), 0.39 + 3.0), "Sequence 2 launch");
+    CHECK(unparked(s2, 0, 2) == 0 && unparked(s2, 2, 4) == 1 && at(s2.puck(2), 0.39 + 3.0), "Sequence 2 launch");
     s2.advance(i2, 96);
-    CHECK(at(s2.puck(4), 0.39 + 3.0 + 2 * 0.045), "Sequence 2: 0.045 a step");
+    CHECK(at(s2.puck(2), 0.39 + 3.0 + 2 * 0.045), "Sequence 2: 0.045 a step");
     // a repeat: life 0.55 (34 steps on, parked at the 35th), at 0.39 x (hits + reps)
     i2.reps[1] = 1;
     s2.advance(i2, 0);
-    CHECK(unparked(s2, 4, 8) == 2 && at(s2.puck(5), 0.39 * 2 + 3.0), "repeat launched at 0.39 x 2 + 3");
+    CHECK(unparked(s2, 2, 4) == 2 && at(s2.puck(3), 0.39 * 2 + 3.0), "repeat launched at 0.39 x 2 + 3");
     s2.advance(i2, 34 * 48);
-    CHECK(!parked(s2.puck(5)), "a repeat lives 34 steps");
+    CHECK(!parked(s2.puck(3)), "a repeat lives 34 steps");
     s2.advance(i2, 48);
-    CHECK(parked(s2.puck(5)) && !parked(s2.puck(4)), "a repeat parks at 35 steps, the hit lives on");
-    // repeats: 2 a call
+    CHECK(parked(s2.puck(3)) && !parked(s2.puck(2)), "a repeat parks at 35 steps, the hit lives on");
+    // repeats: 2 a call (the counts 3, 4): the first to the parked puck, the second to the hit, the older (its life
+    // 1 - 37 x 0.016 under the repeat's 0.55)
     i2.reps[1] = 11;
     s2.advance(i2, 0);
-    CHECK(unparked(s2, 4, 8) == 3, "2 repeats a call: %d", unparked(s2, 4, 8));
+    CHECK(unparked(s2, 2, 4) == 2, "2 repeats a call: %d", unparked(s2, 2, 4));
+    CHECK(at(s2.puck(3), 0.39 * 3 + 3.0) && at(s2.puck(2), 0.39 * 4 + 3.0), "2 repeats a call: counts 3 and 4");
 
     // a muted layer launches none (its counts still taken); the other sequence does
     Sky s3;
@@ -976,13 +982,13 @@ void particles_launch_and_park()
     i3.hits[0] = 3;
     i3.hits[1] = 1;
     s3.advance(i3, 0);
-    CHECK(unparked(s3, 0, 4) == 0 && unparked(s3, 4, 8) == 1, "muted Sequence: none (%d)", unparked(s3, 0, 4));
+    CHECK(unparked(s3, 0, 2) == 0 && unparked(s3, 2, 4) == 1, "muted Sequence: none (%d)", unparked(s3, 0, 2));
     i3.heard[1] = true;
     i3.heard[3] = false;
     i3.hits[0] = 4;
     i3.hits[1] = 2;
     s3.advance(i3, 0);
-    CHECK(unparked(s3, 0, 4) == 1 && at(s3.puck(0), 0.39 * 4) && unparked(s3, 4, 8) == 1, "heard again: from its count");
+    CHECK(unparked(s3, 0, 2) == 1 && at(s3.puck(0), 0.39 * 4) && unparked(s3, 2, 4) == 1, "heard again: from its count");
 
     // stopped (ruling R13): no launches, but the pucks alive go on moving and fading till their life ends
     i3.playing = false;
@@ -990,20 +996,22 @@ void particles_launch_and_park()
     i3.heard[3] = true;
     i3.hits[1] = 3;
     s3.advance(i3, 48);
-    CHECK(unparked(s3, 0, 4) == 1 && unparked(s3, 4, 8) == 1, "stopped: no launches");
-    CHECK(at(s3.puck(0), 0.39 * 4 + 0.06) && at(s3.puck(4), 0.39 + 3.0 + 0.045), "stopped: still moving");
+    CHECK(unparked(s3, 0, 2) == 1 && unparked(s3, 2, 4) == 1, "stopped: no launches");
+    CHECK(at(s3.puck(0), 0.39 * 4 + 0.06) && at(s3.puck(2), 0.39 + 3.0 + 0.045), "stopped: still moving");
     s3.advance(i3, 60 * 48);
-    CHECK(at(s3.puck(0), 0.39 * 4 + 61 * 0.06) && unparked(s3, 0, 8) == 2, "stopped: moving 61 steps on");
+    CHECK(at(s3.puck(0), 0.39 * 4 + 61 * 0.06) && unparked(s3, 0, 4) == 2, "stopped: moving 61 steps on");
     s3.advance(i3, 2 * 48);
-    CHECK(unparked(s3, 0, 8) == 0, "stopped: parked at the end of their life: %d", unparked(s3, 0, 8));
+    CHECK(unparked(s3, 0, 4) == 0, "stopped: parked at the end of their life: %d", unparked(s3, 0, 4));
     // a counter that goes back (a new boot) launches nothing and does not spin
     i3.playing = true;
     i3.hits[0] = 0;
     s3.advance(i3, 0);
-    CHECK(unparked(s3, 0, 4) == 0, "counter back: no launches");
+    CHECK(unparked(s3, 0, 2) == 0, "counter back: no launches");
     i3.hits[0] = 1;
     s3.advance(i3, 0);
-    CHECK(unparked(s3, 0, 4) == 1 && at(s3.puck(0), 0.39 * 1), "counter back: then from there");
+    CHECK(unparked(s3, 0, 2) == 1 && at(s3.puck(0), 0.39 * 1), "counter back: then from there");
+    // out of range: parked
+    CHECK(parked(s3.puck(-1)) && parked(s3.puck(4)), "a puck out of range reads parked");
 }
 
 void planet_frames()
@@ -1321,12 +1329,12 @@ void reset_clears()
     in.hits[1] = 1;
     std::vector<Event> e = {ev(kWhoYou, kEvShakeAll), ev(kWhoYou, kEvNextChord), ev(kWhoYou, kEvForget)};
     feed(s, in, e);
-    CHECK(unparked(s, 0, 8) == 3 && s.flash(0) == 600 && std::strlen(s.logText(2)) > 0, "set up");
+    CHECK(unparked(s, 0, 4) == 3 && s.flash(0) == 600 && std::strlen(s.logText(2)) > 0, "set up");
     std::set<int> seen;
     for (int l = 0; l < 3; l++)
         seen.insert(s.logSerial(l));
     s.reset();
-    CHECK(unparked(s, 0, 8) == 0, "reset: parked");
+    CHECK(unparked(s, 0, 4) == 0, "reset: parked");
     for (int l = 0; l < 6; l++)
         CHECK(s.flash(l) == 0, "reset: flash %d", l);
     for (int p = 0; p < 5; p++)
@@ -1341,7 +1349,7 @@ void reset_clears()
     in.hits[0] = 1;
     in.hits[1] = 0;
     feed(s, in, {ev(kWhoYou, kEvNextChord)});
-    CHECK(unparked(s, 0, 4) == 1 && at(s.puck(0), 0.39), "after reset: a launch");
+    CHECK(unparked(s, 0, 2) == 1 && at(s.puck(0), 0.39), "after reset: a launch");
     CHECK(std::string(s.logText(0)) == "You › Next chord" && !seen.count(s.logSerial(0)), "after reset: a line");
 }
 
