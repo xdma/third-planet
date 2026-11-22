@@ -7,3 +7,7 @@ plugins/*/dist/
 # editors
 .idea/
 .vscode/
+# personal, not part of the project
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/skills/mpc-remote-screen

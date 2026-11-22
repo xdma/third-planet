@@ -17,7 +17,7 @@ code unchanged. Read [CONTRIBUTING.md](CONTRIBUTING.md) first: layout, rules, bu
 
 - Build: `python3 deps/mpc-plugin-sdk/tools/build.py plugins/ThirdPlanet`
 - Build with the skin regenerated: `plugins/ThirdPlanet/tools/build_variant.sh off` (default, no Harmony Link)
-  or `on` (with Harmony Link; rewrites `skins/`, so run `off` again before committing).
+  or `on` (with Harmony Link; its skin goes only into `build/`, the committed `skins/` is left as it is).
 - Tests: `plugins/ThirdPlanet/tests/null_test.sh`, `app_null.sh`, `link_null.sh`, `all.sh`, then
   `deps/mpc-plugin-sdk/.sdk-tools/host_sim plugins/ThirdPlanet/build/native/third-planet.dylib test`.
 - Package: `python3 deps/mpc-plugin-sdk/tools/package.py plugins/ThirdPlanet --out release`

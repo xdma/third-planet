@@ -36,8 +36,8 @@ plugins/ThirdPlanet/tools/build_variant.sh on
 ```
 
 This builds the plugin with `TP_LINK=1`, regenerates the skin so the PLAY page gets a **Link** switch, and
-builds again so the plugin folder carries that skin. It rewrites the committed `plugins/ThirdPlanet/skins/`; run
-`plugins/ThirdPlanet/tools/build_variant.sh off` to go back to the default skin before committing.
+builds again so the plugin folder carries that skin. The Link skin goes only into `build/`: the committed
+`plugins/ThirdPlanet/skins/` (the default build's) is left as it is.
 
 (With the SDK directly: `python3 deps/mpc-plugin-sdk/tools/build.py plugins/ThirdPlanet --define TP_LINK=1` —
 but then the skin is the default one, without the Link switch.)

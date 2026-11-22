@@ -38,7 +38,7 @@ python3 deps/mpc-plugin-sdk/tools/build.py plugins/ThirdPlanet
 The output is `plugins/ThirdPlanet/build/Shostak - VST - Third Planet/` (native, 32-bit ARM and 64-bit ARM).
 
 The default build has Harmony Link compiled out (`TP_LINK=0`). To build it in, use
-`plugins/ThirdPlanet/tools/build_variant.sh on` (and `off` to go back); see [docs/HARMONY-LINK.md](docs/HARMONY-LINK.md).
+`plugins/ThirdPlanet/tools/build_variant.sh on` (it leaves the committed skin as it is); see [docs/HARMONY-LINK.md](docs/HARMONY-LINK.md).
 The committed `skins/` is the default build's skin.
 
 **The skin.** `plugins/ThirdPlanet/tools/gen_skin.py` generates `skins/` from `ui.json` and the built
