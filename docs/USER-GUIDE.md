@@ -182,6 +182,8 @@ Every page except SKY has a status line across the top:
 
 SKY is the first page. It shows the piece as a star chart:
 
+![The SKY page](images/sky.png)
+
 - **Header**: the piece, the tempo ("EXT" while Sync follows the MPC), the key and mode, and HOLD, LOCK and
   SOLO while they are on.
 - **Centre**: the chord sounding, on a disc. Particles circle it: an inner orbit for each Sequence note and an

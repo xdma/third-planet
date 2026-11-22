@@ -2,6 +2,8 @@
 
 A generative 1970s Berlin School instrument for Akai MPC standalone hardware.
 
+![Third Planet's SKY page on an MPC Live III: the chord on a disc, the progression as a constellation, a planet per layer](docs/images/sky.gif)
+
 Load it on a track and it starts playing by itself: two drifting sequences, a drone, a gliding Lead with a
 memory, an Atmosphere, an echo and a plate reverb, moving through ten pieces that slowly change on their own.
 You steer it from the MPC's pads, Q-Links and touch screen.
