@@ -67,9 +67,9 @@ The screen has eleven pages:
 
 | Page | What is on it |
 | --- | --- |
+| SKY | The star chart: the chord, the section, the next chord, the log, a planet per layer; along the bottom Filter, Evolve, Motion, Drift; Energy, Wet, Sweep, Volume; the four layer levels; Piece, Tempo, Root, Mode |
 | PLAY | Hold, Lock, Play, Forget; Next chord, New chords, Shake all, Reset piece; Keys, Pad base, Sync |
 | LAYERS | A column each for Drone, Seq, Lead, Seq 2 and Atmos: Mute, Solo, Nudge, Shake. Space: Nudge, Shake |
-| MAIN | Filter, Evolve, Motion, Drift; Energy, Wet, Sweep, Volume; the four layer levels; Piece, Tempo, Root, Mode |
 | DRONE | Pedal, Reso, Phaser, Attack; Colour, Release, Reverb, Echo; Width, Time, Rate, Intro; its voice |
 | SEQ | Density, Octave, Length, Grid; Cutoff, Decay, Reverb, Echo; Repeat A/B and their times; its voice, Time, Rate, Intro |
 | LEAD | Phrases, Octave, Glide, Vibrato; Tone, Attack, Reverb, Echo; Width, Time, Rate, Intro; its voice |
@@ -78,6 +78,8 @@ The screen has eleven pages:
 | ATMOS | Density, Spread, Drift, Air; Colour, Ring, Reverb, Echo; Width, Time, Rate, Intro; its type and level |
 | SPACE | Echo, Echo time, Feedback, Reverb; Blur, Tone, Width, Plate size; Lead in, Bridge, Arc, Memory; Transpose, Tune |
 | CHORDS | Chord slot, Chord root ("-" is a gap), kind, type; Play (Endless or Loop), Walk |
+
+The full guide to every control is `docs/USER-GUIDE.md` in the source repository.
 
 The FM-1's centre notch and knob acceleration are left out, because the MPC's knobs are absolute.
 
