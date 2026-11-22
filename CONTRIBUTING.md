@@ -7,7 +7,7 @@ Bug reports, fixes and improvements are welcome. Open an issue first for anythin
 - `plugins/ThirdPlanet/` — the plugin: `plugin.json`, `ui.json`, `src/`, `skins/`, `tests/`, `tools/`, `docs/`.
 - `deps/mpc-plugin-sdk/` — the official [MPC Plugin SDK](https://github.com/inmusic-software/mpc-plugin-builder-sdk),
   a git submodule pinned to a commit. Do not edit it; update it by moving the pin.
-- `release/` — the packaged release zips.
+- `release/` — the packaged release zips (each is also attached to its GitHub release).
 - `docs/` — the user guide and the Harmony Link overview.
 
 The SDK's docs are written as if you work inside the SDK folder: read their `tools/…`, `framework/…`, `docs/…`
@@ -52,7 +52,12 @@ plugins/ThirdPlanet/tools/build_variant.sh off
 python3 deps/mpc-plugin-sdk/tools/package.py plugins/ThirdPlanet --out release
 ```
 
-Bump `version` in `plugins/ThirdPlanet/plugin.json` first. Test the zip on an MPC before publishing.
+Bump `version` in `plugins/ThirdPlanet/plugin.json` first. Test the zip on an MPC before publishing. Then commit
+the zip, tag the commit `v<version>` and attach the zip to a GitHub release:
+
+```bash
+gh release create v<version> release/third-planet-<version>-mpc.zip --title "Third Planet <version>"
+```
 
 ## How it is built
 

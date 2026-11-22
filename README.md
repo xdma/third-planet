@@ -29,8 +29,10 @@ like NACHTFAHRT on an FM-1.
 
 ## Download
 
-The ready-to-install plugin is in [`release/`](release/): `third-planet-<version>-mpc.zip`. It contains the
-plugin folder `Shostak - VST - Third Planet`, an `INSTALL.txt` and a short README.
+Download `third-planet-<version>-mpc.zip` from the
+[latest release](https://github.com/xdma/third-planet/releases/latest). It contains the plugin folder
+`Shostak - VST - Third Planet`, an `INSTALL.txt` and a short README. The same zip is also kept in
+[`release/`](release/).
 
 ## Install on the MPC
 
