@@ -10,6 +10,15 @@ Third Planet is a port of **NACHTFAHRT** by Cranky Man (<https://github.com/Fart
 firmware for the M-VAVE FM-1. It runs NACHTFAHRT's own engine and app code, unchanged, so it sounds and behaves
 like NACHTFAHRT on an FM-1.
 
+## Watch it
+
+- [Third Planet on the MPC: a live jam](https://www.youtube.com/watch?v=zlQdgs3vL_k&t=491s) — playing the
+  instrument.
+- [The story of Third Planet](https://www.youtube.com/watch?v=oJrM_kmBQWQ&t=225s) — what it is and how it was
+  made.
+
+## At a glance
+
 - Target: MPC Live III, MPC OS 3.10.1 or later. Other MPC standalone models running MPC OS 3.10.1+ with
   external plugin support should work, but are not tested.
 - Format: VST2 instrument, stereo out, built with the official
