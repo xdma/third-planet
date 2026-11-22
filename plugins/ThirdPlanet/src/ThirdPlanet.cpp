@@ -5,7 +5,7 @@
 // 1970s Berlin School firmware for the M-VAVE FM-1. Both the sound engine and the FM-1's whole app
 // (its pages, buttons, keys, PERFORM, pieces, Evolve) are NACHTFAHRT's own code, unchanged
 // (src/nachtfahrt/, docs/VENDOR.md). This file gives the FM-1 the MPC's controls: pads and keys only play,
-// the screen switches and acts (docs/superpowers/specs/2026-11-20-third-planet-controls-design.md):
+// the screen switches and acts:
 //
 //   Keys: Pads, notes from Pad base   +0..15 the Lead's scale degrees 1..16, +16..31 the 16 effects of the
 //                                     FM-1's grid, +32..39 the moves (Rise, Close, Transpose, Sweep, Open,
@@ -64,8 +64,8 @@ constexpr int kDispPad = tp::kNumControls;   // what the last pad or note did (k
 constexpr int kDispChord = kDispPad + 1;     // the chord sounding (tp::app::chordCode)
 constexpr int kDispHold = kDispPad + 2;      // Hold
 constexpr int kDispLock = kDispPad + 3;      // Lock
-// All of them by display index k (parameter kDispPad + k): the status line's four, then the star-chart screen's
-// (docs/superpowers/specs/2026-11-20-third-planet-screen-design.md, section 10). tools/gen_skin.py finds them by id
+// All of them by display index k (parameter kDispPad + k): the status line's four, then the star-chart screen's.
+// tools/gen_skin.py finds them by id
 // (d_section .. d_tempo), in this order, so it is free to grow at the end only.
 constexpr int kSlots = EN_NPROG, kPucks = tp::sky::kPucks, kPlanets = tp::sky::kPlanets, kLogLines = tp::sky::kLogLines;
 enum Disp : int

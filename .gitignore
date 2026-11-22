@@ -4,3 +4,6 @@ vendor/
 plugins/*/build/
 plugins/*/dist/
 .DS_Store
+# editors
+.idea/
+.vscode/

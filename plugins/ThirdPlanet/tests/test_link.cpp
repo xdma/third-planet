@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Harmony Link's capture on the audio thread (docs/superpowers/specs/2026-11-21-harmony-link-design.md, 5.2, 5.4 and
-// 5.5), through the plugin class with a fake host that answers audioMasterGetTime, draining linkRing_ directly:
+// Harmony Link's capture on the audio thread (docs/harmony-link.md),
+// through the plugin class with a fake host that answers audioMasterGetTime, draining linkRing_ directly:
 //   - Link Off pushes nothing; Link On pushes a Plan when Link turns on and then only on a change;
 //   - a hand's Next chord comes out as an Event, then a Plan with the new chord; Evolve's values are not forwarded;
 //   - the Plan carries the readouts (app_api.h) and the host's position in 16ths; chordMask() is the engine's chord;

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Third Planet's controls for the MPC (docs/superpowers/specs/2026-11-20-third-planet-controls-design.md):
+// Third Planet's controls for the MPC:
 //   1. the pads: each bank sets the engine state it must, while held; a release ends what the press began,
 //      whatever Keys or Pad base say by then; all notes off, a change of Keys or of Pad base let go of all;
 //   2. Keys: Lead, and notes outside the banks: the Lead by MIDI;

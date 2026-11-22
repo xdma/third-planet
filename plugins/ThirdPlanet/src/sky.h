@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Third Planet: the star-chart screen's model (docs/superpowers/specs/2026-11-20-third-planet-screen-design.md,
-// section 8.1). It turns the app's readouts and its event log into what the SKY tab shows: the orbit particles,
+// Third Planet: the star-chart screen's model.
+// It turns the app's readouts and its event log into what the SKY tab shows: the orbit particles,
 // the five planets' frames and the three log lines. Pure: no app, no heap, no locks or I/O; it runs on the audio
 // thread. The plugin feeds it a SkyInput and sends what it reads back as display parameters.
 #pragma once

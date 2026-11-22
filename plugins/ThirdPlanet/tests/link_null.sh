@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-only
-# Harmony Link's default-path proof: with Link Off (the default), Third Planet is the link baseline exactly
-# (docs/superpowers/specs/2026-11-21-harmony-link-design.md).
+# Harmony Link's default-path proof: with Link Off (the default), Third Planet is the link baseline exactly.
 #
 # tests/link_null.cpp (this tree's file, unchanged) plays one deterministic 90 s script into the plugin through its
 # VST entry and records the audio, the saved project, the host notifications and the final parameter values, over
 # the base's parameters (Link, inserted after Sync, is left out by its id). It is built three ways:
-#   (a) the link baseline at e58a6f3 (git archive): tp-screen, the Sync start on the bar line (T-1745) and Sync
+#   (a) the link baseline at d31f2a8 (git archive): tp-screen, the Sync start on the bar line (T-1745) and Sync
 #       across a loop jump (T-1757);
 #   (b) this tree with TP_LINK=0 (compiled out);
 #   (c) this tree with TP_LINK=1 (compiled in, Link Off).
@@ -23,14 +22,15 @@
 #     parameter "Link", right after "Sync", every other parameter identical (its index one higher after Link);
 #   - gen_skin.py run on (b)'s params.json, in a copy of the project, writes the base's skins/ byte for byte.
 # (No self-test that the proof can see Link on: Link does nothing yet. The later tasks add one.)
-# The plugin's own build/ is left with the default build (c), rebuilt last; the committed skins/ is never touched.
+# The plugin's own build/ is left with the default build (Link compiled out, = (b)), rebuilt last; the committed skins/ is
+# never touched.
 #   plugins/ThirdPlanet/tests/link_null.sh   (from the repository root; about 15 s)
 set -u
 cd "$(dirname "$0")/../../.." || exit 1
 ROOT=$PWD
 T=plugins/ThirdPlanet
 B=$T/build/lnull
-BASE_REV=e58a6f3
+BASE_REV=d31f2a8
 FW=deps/mpc-plugin-sdk/framework
 SDK_BUILD=deps/mpc-plugin-sdk/tools/build.py
 BT=$B/base/$T   # the base project, extracted
@@ -200,7 +200,12 @@ if [ -f "$B/params_b.json" ]; then
     else fail "gen_skin.py on (b) failed: see $B/gen_skin.log"; tail -5 "$B/gen_skin.log"; fi
 fi
 
-build "$T" "$B/params_c.json"   # (last: this tree's build/ is left with the default build)
+build "$T" "$B/params_c.json" --define TP_LINK=1
+build "$T" "$B/params_d.json"   # (last: this tree's build/ is left with the default build, Link compiled out)
+if [ -f "$B/params_b.json" ] && [ -f "$B/params_d.json" ]; then
+    cmp -s "$B/params_b.json" "$B/params_d.json" && echo "params.json: the default build = (b), TP_LINK=0" \
+        || fail "params.json: the default build differs from (b), TP_LINK=0"
+fi
 
 if [ -f "$B/params_a.json" ] && [ -f "$B/params_b.json" ] && [ -f "$B/params_c.json" ]; then
     python3 -I - "$B/params_a.json" "$B/params_b.json" "$B/params_c.json" <<'EOF' || status=1

@@ -81,8 +81,8 @@ int chordCode();
 void chordText(int code, char* buf);   // buf: kChordTextMax; "" for 0 or a code out of range
 const char* chordNow(char* buf);       // (tests) ui.c's own chord_now()
 
-// The MPC's own controls for what the FM-1 does with gestures (docs/superpowers/specs/2026-11-20-third-planet-
-// controls-design.md). Each calls the code in ui.c that the FM-1's gesture calls, and counts as the player acting
+// The MPC's own controls for what the FM-1 does with gestures.
+// Each calls the code in ui.c that the FM-1's gesture calls, and counts as the player acting
 // (autosave). Setters are absolute: setting what already is does nothing.
 constexpr int kNumLayers = 5;     // Drone, Sequence, Lead, Sequence 2, Atmosphere (PERFORM's mutes and solos)
 constexpr int kNumNudge = 6;      // Drone, Sequence, Lead, Sequence 2, Space, Atmosphere (ui.c NUDGE_*)
@@ -116,7 +116,7 @@ uint32_t perfMoves();             // PERFORM's moves held (EN_PF_*)
 const char* fxName(int fx);
 const char* moveName(int move);
 
-// Readouts for the star-chart screen (docs/superpowers/specs/2026-11-20-third-planet-screen-design.md). Each reads
+// Readouts for the star-chart screen. Each reads
 // what the engine and ui.c already keep; nothing changes. An index out of range reads 0 (or the empty state).
 int section();                    // the arc's section, EN_SEC_* (0..3; EN_SEC_NAME names it)
 int phraseBar();                  // the bar of the phrase, 0..7

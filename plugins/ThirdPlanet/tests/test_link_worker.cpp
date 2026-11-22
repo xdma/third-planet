@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Harmony Link's worker (src/link_worker.h; docs/superpowers/specs/2026-11-21-harmony-link-design.md, 5.2 and 5.6)
+// Harmony Link's worker (src/link_worker.h; docs/harmony-link.md)
 // against a fake ALSA sequencer (a SeqApi that records what is sent and serves queued input) and a fake clock the
 // test steps one poll at a time, so every count below is exact:
 //   - a Plan pushed goes out within one poll; Plans are coalesced to 20 a second, the last one pushed always sent;

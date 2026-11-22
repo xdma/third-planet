@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Third Planet: Harmony Link's capture (docs/superpowers/specs/2026-11-21-harmony-link-design.md, 5.2, 5.4 and 5.5).
+// Third Planet: Harmony Link's capture (docs/harmony-link.md).
 // On the audio thread, once a block, from watch(): no allocation, no locks, no I/O. Everything is read from the
 // tp::app readouts (app_api.h) as they stand; nothing new is computed in the engine.
 // (Defined in link_capture.cpp only with TP_LINK=1.)

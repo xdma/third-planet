@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Third Planet: Harmony Link's worker (docs/superpowers/specs/2026-11-21-harmony-link-design.md, 5.2 and 5.6): its
+// Third Planet: Harmony Link's worker (docs/harmony-link.md): its
 // own thread, the one consumer of the audio thread's ring, and the only code that touches ALSA.
 //
 // While the link is on it:

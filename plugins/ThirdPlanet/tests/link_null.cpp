@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Harmony Link's default-path proof (tests/link_null.sh): one deterministic script played into the plugin through
-// its VST entry only, recorded to one file. The same file compiles unchanged against the link baseline (e58a6f3, no
+// its VST entry only, recorded to one file. The same file compiles unchanged against the link baseline (d31f2a8, no
 // Link) and against this tree with TP_LINK=0 and 1; with Link left Off, all three must write the same audio, saved
 // project and final values (link_null.sh says what it asks of the notifications). It uses
 // only base-era API: VSTPluginMain, processReplacing, dispatcher, setParameter, getParameter, tp::kParams (indices
